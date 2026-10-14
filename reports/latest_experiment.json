@@ -1,0 +1,483 @@
+{
+  "experiment": "synthetic_feature_drift",
+  "run_id": "4e1eb65c7078428caca7b686281500d1",
+  "created_at": "2026-10-14T07:19:51.292763+00:00",
+  "dataset": {
+    "training_samples": 4500,
+    "reference_samples": 1500,
+    "drifted_samples": 1500,
+    "feature_count": 8
+  },
+  "data_validation": {
+    "training": {
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "summary": {
+        "row_count": 4500,
+        "feature_count": 8,
+        "duplicate_rows": 0,
+        "duplicate_rate": 0.0,
+        "missing_values": 0,
+        "non_finite_values": 0
+      },
+      "features": [
+        {
+          "feature": "feature_0",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -4.983883327432899,
+          "maximum": 6.930514853492679,
+          "errors": []
+        },
+        {
+          "feature": "feature_1",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -6.595524762858562,
+          "maximum": 7.9458980269363915,
+          "errors": []
+        },
+        {
+          "feature": "feature_2",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -3.5218084233963887,
+          "maximum": 4.29885757229876,
+          "errors": []
+        },
+        {
+          "feature": "feature_3",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -6.12254248516193,
+          "maximum": 4.0282397802138625,
+          "errors": []
+        },
+        {
+          "feature": "feature_4",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -5.900757955878744,
+          "maximum": 6.154101046920436,
+          "errors": []
+        },
+        {
+          "feature": "feature_5",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -7.280280444249685,
+          "maximum": 6.9740100828940825,
+          "errors": []
+        },
+        {
+          "feature": "feature_6",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -4.650120250743914,
+          "maximum": 5.2555509209974565,
+          "errors": []
+        },
+        {
+          "feature": "feature_7",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -6.257001607502572,
+          "maximum": 6.610458204868418,
+          "errors": []
+        }
+      ]
+    },
+    "reference": {
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "summary": {
+        "row_count": 1500,
+        "feature_count": 8,
+        "duplicate_rows": 0,
+        "duplicate_rate": 0.0,
+        "missing_values": 0,
+        "non_finite_values": 0
+      },
+      "features": [
+        {
+          "feature": "feature_0",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -4.93275200082303,
+          "maximum": 7.247668722712328,
+          "errors": []
+        },
+        {
+          "feature": "feature_1",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -6.398906951009181,
+          "maximum": 7.503535311981892,
+          "errors": []
+        },
+        {
+          "feature": "feature_2",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -4.186147504069675,
+          "maximum": 4.015577587568882,
+          "errors": []
+        },
+        {
+          "feature": "feature_3",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -4.94496442689662,
+          "maximum": 3.9565621660825387,
+          "errors": []
+        },
+        {
+          "feature": "feature_4",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -5.5672015819169225,
+          "maximum": 7.155025799066396,
+          "errors": []
+        },
+        {
+          "feature": "feature_5",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -7.110799246831473,
+          "maximum": 6.218829256799863,
+          "errors": []
+        },
+        {
+          "feature": "feature_6",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -4.263210312243857,
+          "maximum": 4.7309080706340625,
+          "errors": []
+        },
+        {
+          "feature": "feature_7",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -5.302177111781697,
+          "maximum": 6.239235324688824,
+          "errors": []
+        }
+      ]
+    },
+    "drifted": {
+      "valid": true,
+      "errors": [],
+      "warnings": [],
+      "summary": {
+        "row_count": 1500,
+        "feature_count": 8,
+        "duplicate_rows": 0,
+        "duplicate_rate": 0.0,
+        "missing_values": 0,
+        "non_finite_values": 0
+      },
+      "features": [
+        {
+          "feature": "feature_0",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -1.9327520008230303,
+          "maximum": 10.247668722712328,
+          "errors": []
+        },
+        {
+          "feature": "feature_1",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -15.997267377522952,
+          "maximum": 18.75883827995473,
+          "errors": []
+        },
+        {
+          "feature": "feature_2",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -5.528973578038576,
+          "maximum": 6.490919909427811,
+          "errors": []
+        },
+        {
+          "feature": "feature_3",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -4.94496442689662,
+          "maximum": 3.9565621660825387,
+          "errors": []
+        },
+        {
+          "feature": "feature_4",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -5.5672015819169225,
+          "maximum": 7.155025799066396,
+          "errors": []
+        },
+        {
+          "feature": "feature_5",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -7.110799246831473,
+          "maximum": 6.218829256799863,
+          "errors": []
+        },
+        {
+          "feature": "feature_6",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -4.263210312243857,
+          "maximum": 4.7309080706340625,
+          "errors": []
+        },
+        {
+          "feature": "feature_7",
+          "dtype": "float64",
+          "missing_count": 0,
+          "non_finite_count": 0,
+          "minimum": -5.302177111781697,
+          "maximum": 6.239235324688824,
+          "errors": []
+        }
+      ]
+    }
+  },
+  "baseline_metrics": {
+    "accuracy": 0.816,
+    "precision": 0.8191632928475033,
+    "recall": 0.8104138851802403,
+    "f1": 0.8147651006711409,
+    "sample_count": 1500
+  },
+  "changed_metrics": {
+    "accuracy": 0.8113333333333334,
+    "precision": 0.8710191082802548,
+    "recall": 0.7303070761014686,
+    "f1": 0.794480755265069,
+    "sample_count": 1500
+  },
+  "metric_deltas": {
+    "accuracy": -0.004667,
+    "precision": 0.051856,
+    "recall": -0.080107,
+    "f1": -0.020284
+  },
+  "drift_summary": {
+    "alpha": 0.05,
+    "effect_threshold": 0.1,
+    "medium_threshold": 0.1,
+    "high_threshold": 0.3,
+    "multiple_testing_correction": "Benjamini-Hochberg",
+    "drifted_feature_count": 3,
+    "drifted_features": [
+      "feature_0",
+      "feature_1",
+      "feature_2"
+    ],
+    "severity_counts": {
+      "high": 1,
+      "medium": 2,
+      "low": 0
+    }
+  },
+  "feature_drift": [
+    {
+      "feature": "feature_0",
+      "ks_statistic": 0.6933333333333334,
+      "p_value": 0.0,
+      "adjusted_p_value": 0.0,
+      "effect_size": 0.6933333333333334,
+      "statistically_significant": true,
+      "drift_detected": true,
+      "severity": "high"
+    },
+    {
+      "feature": "feature_1",
+      "ks_statistic": 0.274,
+      "p_value": 6.01473095031319e-50,
+      "adjusted_p_value": 2.405892380125276e-49,
+      "effect_size": 0.274,
+      "statistically_significant": true,
+      "drift_detected": true,
+      "severity": "medium"
+    },
+    {
+      "feature": "feature_2",
+      "ks_statistic": 0.156,
+      "p_value": 2.443188193720279e-16,
+      "adjusted_p_value": 6.51516851658741e-16,
+      "effect_size": 0.156,
+      "statistically_significant": true,
+      "drift_detected": true,
+      "severity": "medium"
+    },
+    {
+      "feature": "feature_3",
+      "ks_statistic": 0.0,
+      "p_value": 1.0,
+      "adjusted_p_value": 1.0,
+      "effect_size": 0.0,
+      "statistically_significant": false,
+      "drift_detected": false,
+      "severity": "none"
+    },
+    {
+      "feature": "feature_4",
+      "ks_statistic": 0.0,
+      "p_value": 1.0,
+      "adjusted_p_value": 1.0,
+      "effect_size": 0.0,
+      "statistically_significant": false,
+      "drift_detected": false,
+      "severity": "none"
+    },
+    {
+      "feature": "feature_5",
+      "ks_statistic": 0.0,
+      "p_value": 1.0,
+      "adjusted_p_value": 1.0,
+      "effect_size": 0.0,
+      "statistically_significant": false,
+      "drift_detected": false,
+      "severity": "none"
+    },
+    {
+      "feature": "feature_6",
+      "ks_statistic": 0.0,
+      "p_value": 1.0,
+      "adjusted_p_value": 1.0,
+      "effect_size": 0.0,
+      "statistically_significant": false,
+      "drift_detected": false,
+      "severity": "none"
+    },
+    {
+      "feature": "feature_7",
+      "ks_statistic": 0.0,
+      "p_value": 1.0,
+      "adjusted_p_value": 1.0,
+      "effect_size": 0.0,
+      "statistically_significant": false,
+      "drift_detected": false,
+      "severity": "none"
+    }
+  ],
+  "alert_summary": {
+    "generated": 3,
+    "saved": 3,
+    "by_severity": {
+      "high": 1,
+      "medium": 2,
+      "low": 0
+    }
+  },
+  "alerts": [
+    {
+      "alert_id": "c1f9f6ac-5b4a-4b56-80d4-a7c96cd36bc3",
+      "experiment": "synthetic_feature_drift",
+      "run_id": "4e1eb65c7078428caca7b686281500d1",
+      "feature": "feature_0",
+      "severity": "high",
+      "title": "HIGH drift detected: feature_0",
+      "message": "Feature 'feature_0' differs from its reference distribution. KS effect size=0.6933; adjusted p-value=0. Investigate the feature pipeline, data source, and recent upstream changes before relying on model predictions.",
+      "effect_size": 0.6933333333333334,
+      "adjusted_p_value": 0.0,
+      "created_at": "2026-10-14T07:19:44.606458+00:00",
+      "details": {
+        "feature": "feature_0",
+        "ks_statistic": 0.6933333333333334,
+        "p_value": 0.0,
+        "adjusted_p_value": 0.0,
+        "effect_size": 0.6933333333333334,
+        "statistically_significant": true,
+        "drift_detected": true,
+        "severity": "high"
+      },
+      "recommendation": "Investigate the feature pipeline, data source, and recent upstream changes before relying on model predictions."
+    },
+    {
+      "alert_id": "32633cf7-a0a6-4e05-9c42-d927443e826b",
+      "experiment": "synthetic_feature_drift",
+      "run_id": "4e1eb65c7078428caca7b686281500d1",
+      "feature": "feature_1",
+      "severity": "medium",
+      "title": "MEDIUM drift detected: feature_1",
+      "message": "Feature 'feature_1' differs from its reference distribution. KS effect size=0.2740; adjusted p-value=2.40589e-49. Review recent feature distributions and compare them with the reference dataset.",
+      "effect_size": 0.274,
+      "adjusted_p_value": 2.405892380125276e-49,
+      "created_at": "2026-10-14T07:19:44.606458+00:00",
+      "details": {
+        "feature": "feature_1",
+        "ks_statistic": 0.274,
+        "p_value": 6.01473095031319e-50,
+        "adjusted_p_value": 2.405892380125276e-49,
+        "effect_size": 0.274,
+        "statistically_significant": true,
+        "drift_detected": true,
+        "severity": "medium"
+      },
+      "recommendation": "Review recent feature distributions and compare them with the reference dataset."
+    },
+    {
+      "alert_id": "1b988bfa-6efb-4c2c-b1a1-22eaed945a8f",
+      "experiment": "synthetic_feature_drift",
+      "run_id": "4e1eb65c7078428caca7b686281500d1",
+      "feature": "feature_2",
+      "severity": "medium",
+      "title": "MEDIUM drift detected: feature_2",
+      "message": "Feature 'feature_2' differs from its reference distribution. KS effect size=0.1560; adjusted p-value=6.51517e-16. Review recent feature distributions and compare them with the reference dataset.",
+      "effect_size": 0.156,
+      "adjusted_p_value": 6.51516851658741e-16,
+      "created_at": "2026-10-14T07:19:44.606458+00:00",
+      "details": {
+        "feature": "feature_2",
+        "ks_statistic": 0.156,
+        "p_value": 2.443188193720279e-16,
+        "adjusted_p_value": 6.51516851658741e-16,
+        "effect_size": 0.156,
+        "statistically_significant": true,
+        "drift_detected": true,
+        "severity": "medium"
+      },
+      "recommendation": "Review recent feature distributions and compare them with the reference dataset."
+    }
+  ],
+  "limitations": [
+    "The dataset is synthetic, not a real production incident.",
+    "Feature drift does not establish causation.",
+    "Drifted labels are retained from reference samples.",
+    "Benjamini-Hochberg controls the false discovery rate under its applicable statistical assumptions; it does not eliminate all false positives.",
+    "Duplicate rows generate warnings rather than automatic rejection when below validation limits.",
+    "Severity thresholds are configurable heuristics, not calibrated business-impact estimates.",
+    "A drift alert alone does not prove that model performance has degraded."
+  ]
+}
