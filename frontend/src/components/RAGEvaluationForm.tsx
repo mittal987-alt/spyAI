@@ -313,6 +313,7 @@ export default function RAGEvaluationForm({
               <div key={key} className="rounded-lg bg-slate-900 p-3">
                 <p className="text-xs text-slate-500">{key.replaceAll("_", " ")}</p>
                 <p className="mt-1 text-lg text-white">
+                  
                   {Number.isFinite(value) && Math.abs(value) <= 1
                     ? `${(value * 100).toFixed(1)}%`
                     : value}
