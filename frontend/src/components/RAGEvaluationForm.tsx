@@ -1,6 +1,15 @@
 
 import { useState } from "react";
-import { AlertCircle, Play, Plus, Trash2 } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Play,
+  Plus,
+  Trash2,
+  XCircle,
+} from "lucide-react";
 import axios from "axios";
 
 const API_BASE =
@@ -11,18 +20,269 @@ interface DocumentInput {
   text: string;
 }
 
+interface SentenceAnalysis {
+  sentence: string;
+  support_score: number;
+  best_context_index: number;
+  supported_by_similarity_threshold: boolean;
+}
+
 interface EvaluationResult {
   query: string;
   summary: Record<string, number>;
   findings: Array<{
-    title?: string;
+    type?: string;
     severity?: string;
-    description?: string;
+    message?: string;
   }>;
   history?: {
     run_id?: string;
     created_at?: string;
   };
+  evaluation?: {
+    answer?: {
+      sentence_analysis?: SentenceAnalysis[];
+      answer_relevance_score?: number;
+      context_support_coverage?: number;
+    };
+    retrieval?: {
+      precision_at_k?: number;
+      recall_at_k?: number;
+      ndcg_at_k?: number;
+    };
+  };
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+function scoreColor(score: number, supported: boolean): string {
+  if (supported) return "supported";
+  if (score >= 0.35) return "partial";
+  return "unsupported";
+}
+
+function ScoreBadge({ score }: { score: number }) {
+  const pct = Math.round(score * 100);
+  const cls =
+    score >= 0.5 ? "sb-green" : score >= 0.35 ? "sb-amber" : "sb-red";
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        fontSize: "0.64rem",
+        fontWeight: 700,
+        padding: "0.08rem 0.45rem",
+        borderRadius: "999px",
+        border: `1px solid ${
+          cls === "sb-green"
+            ? "rgba(52,211,153,0.35)"
+            : cls === "sb-amber"
+              ? "rgba(251,191,36,0.35)"
+              : "rgba(248,113,113,0.35)"
+        }`,
+        background:
+          cls === "sb-green"
+            ? "rgba(52,211,153,0.1)"
+            : cls === "sb-amber"
+              ? "rgba(251,191,36,0.1)"
+              : "rgba(248,113,113,0.1)",
+        color:
+          cls === "sb-green"
+            ? "#34d399"
+            : cls === "sb-amber"
+              ? "#fbbf24"
+              : "#f87171",
+      }}
+    >
+      {pct}%
+    </span>
+  );
+}
+
+function MetricPill({
+  label,
+  value,
+}: {
+  label: string;
+  value: number | undefined;
+}) {
+  if (value == null || !Number.isFinite(value)) return null;
+  const display = value <= 1 ? `${(value * 100).toFixed(1)}%` : value.toFixed(3);
+  const good = value >= 0.5;
+  return (
+    <div
+      style={{
+        background: "rgba(0,0,0,0.3)",
+        border: "1px solid rgba(255,255,255,0.07)",
+        borderRadius: "0.6rem",
+        padding: "0.6rem 0.75rem",
+      }}
+    >
+      <p style={{ fontSize: "0.67rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "0.25rem" }}>
+        {label}
+      </p>
+      <p style={{ fontSize: "1.1rem", fontWeight: 700, color: good ? "#34d399" : "#fbbf24", letterSpacing: "-0.02em" }}>
+        {display}
+      </p>
+    </div>
+  );
+}
+
+function SentenceAttributionPanel({
+  sentences,
+  documents,
+}: {
+  sentences: SentenceAnalysis[];
+  documents: DocumentInput[];
+}) {
+  const [openIdx, setOpenIdx] = useState<number | null>(null);
+  if (!sentences.length) return null;
+
+  const DOTS: Record<string, string> = {
+    supported: "#34d399",
+    partial: "#fbbf24",
+    unsupported: "#f87171",
+  };
+
+  return (
+    <div
+      style={{
+        marginTop: "1.5rem",
+        borderRadius: "0.9rem",
+        border: "1px solid rgba(139,92,246,0.2)",
+        background: "linear-gradient(135deg,rgba(139,92,246,0.05) 0%,rgba(13,20,36,0.95) 100%)",
+        padding: "1.1rem 1.15rem",
+      }}
+    >
+      <h4 style={{ fontSize: "0.9rem", fontWeight: 600, color: "#c4b5fd", marginBottom: "0.3rem" }}>
+        Sentence-Level Context Attribution
+      </h4>
+      <p style={{ fontSize: "0.77rem", color: "#94a3b8", lineHeight: 1.5, marginBottom: "0.85rem" }}>
+        Each answer sentence is scored by how well it is supported by the retrieved documents.
+        Click a sentence to reveal the best-matching context chunk.
+      </p>
+
+      {/* Legend */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.7rem", marginBottom: "0.9rem" }}>
+        {(["supported", "partial", "unsupported"] as const).map((tier) => (
+          <span key={tier} style={{ display: "flex", alignItems: "center", gap: "0.35rem", fontSize: "0.71rem", color: "#94a3b8" }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: DOTS[tier], display: "inline-block" }} />
+            {tier === "supported" ? "Supported (≥50%)" : tier === "partial" ? "Partial (35–49%)" : "Unsupported (<35%)"}
+          </span>
+        ))}
+      </div>
+
+      {/* Sentence cards */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
+        {sentences.map((item, i) => {
+          const tier = scoreColor(item.support_score, item.supported_by_similarity_threshold);
+          const isOpen = openIdx === i;
+          const matchedDoc = documents[item.best_context_index];
+          const borderCol =
+            tier === "supported"
+              ? "rgba(52,211,153,0.25)"
+              : tier === "partial"
+                ? "rgba(251,191,36,0.25)"
+                : "rgba(248,113,113,0.3)";
+          const bgCol =
+            tier === "supported"
+              ? "rgba(52,211,153,0.04)"
+              : tier === "partial"
+                ? "rgba(251,191,36,0.04)"
+                : "rgba(248,113,113,0.05)";
+          const accentCol = DOTS[tier];
+
+          return (
+            <div
+              key={i}
+              style={{ borderRadius: "0.55rem", border: `1px solid ${borderCol}`, background: bgCol, overflow: "hidden" }}
+            >
+              <button
+                type="button"
+                onClick={() => setOpenIdx(isOpen ? null : i)}
+                aria-expanded={isOpen}
+                style={{
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: "0.55rem",
+                  padding: "0.6rem 0.7rem",
+                  textAlign: "left",
+                  background: "transparent",
+                  cursor: "pointer",
+                  border: "none",
+                }}
+              >
+                <span style={{ flexShrink: 0, fontSize: "0.63rem", fontWeight: 700, fontFamily: "monospace", color: "#64748b", paddingTop: "0.1rem" }}>
+                  S{i + 1}
+                </span>
+                <span style={{ flex: 1, fontSize: "0.79rem", color: "#e2e8f0", lineHeight: 1.55 }}>
+                  {item.sentence}
+                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexShrink: 0 }}>
+                  <ScoreBadge score={item.support_score} />
+                  {isOpen
+                    ? <ChevronUp size={13} style={{ color: "#64748b" }} />
+                    : <ChevronDown size={13} style={{ color: "#64748b" }} />}
+                </div>
+              </button>
+
+              {isOpen && (
+                <div
+                  style={{
+                    padding: "0.7rem 0.8rem 0.8rem",
+                    borderTop: "1px solid rgba(255,255,255,0.06)",
+                  }}
+                >
+                  <p style={{ fontSize: "0.7rem", fontWeight: 600, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "0.45rem" }}>
+                    Best match — {matchedDoc ? `"${matchedDoc.id}"` : `index ${item.best_context_index}`}
+                  </p>
+                  <blockquote
+                    style={{
+                      fontSize: "0.77rem",
+                      color: "#cbd5e1",
+                      lineHeight: 1.6,
+                      background: "rgba(0,0,0,0.25)",
+                      borderLeft: `3px solid ${accentCol}`,
+                      padding: "0.55rem 0.7rem",
+                      borderRadius: "0 0.35rem 0.35rem 0",
+                      margin: "0 0 0.55rem",
+                      maxHeight: "110px",
+                      overflowY: "auto",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {matchedDoc?.text ?? "Context not available in current session."}
+                  </blockquote>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", fontSize: "0.74rem", color: "#64748b" }}>
+                    <span>Cosine similarity:</span>
+                    <span style={{ fontWeight: 700, color: accentCol }}>
+                      {(item.support_score * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  {!item.supported_by_similarity_threshold && (
+                    <p
+                      style={{
+                        fontSize: "0.72rem",
+                        color: "#fca5a5",
+                        marginTop: "0.45rem",
+                        padding: "0.38rem 0.55rem",
+                        borderRadius: "0.35rem",
+                        background: "rgba(248,113,113,0.1)",
+                      }}
+                    >
+                      ⚠ Sentence did not meet the support threshold — review for potential hallucination.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export default function RAGEvaluationForm({
@@ -298,35 +558,75 @@ export default function RAGEvaluationForm({
       </form>
 
       {result && (
-        <div className="mt-6 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
-          <h3 className="font-medium text-emerald-300">
+        <div
+          style={{
+            marginTop: "1.5rem",
+            borderRadius: "0.85rem",
+            border: "1px solid rgba(52,211,153,0.2)",
+            background: "rgba(52,211,153,0.04)",
+            padding: "1.1rem 1.2rem",
+          }}
+        >
+          {/* Heading */}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", fontSize: "0.88rem", fontWeight: 600, color: "#6ee7b7", marginBottom: "0.7rem" }}>
+            <CheckCircle2 size={15} />
             Evaluation completed
-          </h3>
-          <p className="mt-2 text-sm text-slate-400">
-            Run ID:{" "}
-            <span className="font-mono text-slate-200">
-              {result.history?.run_id ?? "Saved; run ID not returned"}
-            </span>
-          </p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            {Object.entries(result.summary ?? {}).map(([key, value]) => (
-              <div key={key} className="rounded-lg bg-slate-900 p-3">
-                <p className="text-xs text-slate-500">{key.replaceAll("_", " ")}</p>
-                <p className="mt-1 text-lg text-white">
-                  
-                  
-                  {Number.isFinite(value) && Math.abs(value) <= 1
-                    ? `${(value * 100).toFixed(1)}%`
-                    : value}
-                </p>
-              </div>
-            ))}
           </div>
-          {result.findings?.length > 0 && (
-            <p className="mt-4 text-sm text-amber-300">
-              {result.findings.length} finding(s) reported. Review the evaluation details.
+
+          {result.history?.run_id && (
+            <p style={{ fontSize: "0.77rem", color: "#64748b", marginBottom: "0.9rem" }}>
+              Run ID: <span style={{ fontFamily: "monospace", color: "#e2e8f0" }}>{result.history.run_id}</span>
             </p>
           )}
+
+          {/* Metric pills */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(130px,1fr))", gap: "0.55rem", marginBottom: "0.9rem" }}>
+            <MetricPill label="Precision@K" value={result.evaluation?.retrieval?.precision_at_k} />
+            <MetricPill label="Recall@K" value={result.evaluation?.retrieval?.recall_at_k} />
+            <MetricPill label="NDCG@K" value={result.evaluation?.retrieval?.ndcg_at_k} />
+            <MetricPill label="Answer Relevance" value={result.evaluation?.answer?.answer_relevance_score} />
+            <MetricPill label="Context Support" value={result.evaluation?.answer?.context_support_coverage} />
+          </div>
+
+          {/* Findings */}
+          {result.findings?.length > 0 && (
+            <div style={{ marginBottom: "0.5rem" }}>
+              <p style={{ fontSize: "0.68rem", color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "0.4rem" }}>Findings</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                {result.findings.map((f, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "0.45rem",
+                      fontSize: "0.77rem",
+                      padding: "0.45rem 0.6rem",
+                      borderRadius: "0.4rem",
+                      background: "rgba(0,0,0,0.2)",
+                      border: "1px solid rgba(255,255,255,0.05)",
+                      color: "#cbd5e1",
+                    }}
+                  >
+                    {f.severity === "high" ? (
+                      <XCircle size={14} style={{ color: "#f87171", flexShrink: 0 }} />
+                    ) : f.severity === "medium" || f.severity === "review" ? (
+                      <AlertCircle size={14} style={{ color: "#fbbf24", flexShrink: 0 }} />
+                    ) : (
+                      <CheckCircle2 size={14} style={{ color: "#34d399", flexShrink: 0 }} />
+                    )}
+                    <span>{f.message}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Attribution highlighter */}
+          <SentenceAttributionPanel
+            sentences={result.evaluation?.answer?.sentence_analysis ?? []}
+            documents={documents}
+          />
         </div>
       )}
     </section>

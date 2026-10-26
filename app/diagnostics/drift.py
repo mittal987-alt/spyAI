@@ -1,6 +1,7 @@
 
+from typing import Any
 import numpy as np
-from scipy.stats import ks_2samp
+from scipy.stats import ks_2samp, wasserstein_distance
 
 
 def benjamini_hochberg(p_values, alpha=0.05):
@@ -49,6 +50,88 @@ def benjamini_hochberg(p_values, alpha=0.05):
     return adjusted.tolist(), rejected.tolist()
 
 
+def calculate_psi(
+    reference: np.ndarray,
+    current: np.ndarray,
+    num_bins: int = 10,
+    epsilon: float = 1e-4,
+) -> dict[str, Any]:
+    """
+    Calculate Population Stability Index (PSI) and quantile bucket statistics.
+
+    PSI benchmarks:
+        < 0.10: Stable / No significant distribution change
+        0.10 - 0.25: Moderate drift / Monitor closely
+        >= 0.25: Significant drift / Model retraining or intervention required
+    """
+    ref = np.asarray(reference, dtype=float).ravel()
+    cur = np.asarray(current, dtype=float).ravel()
+
+    if len(ref) == 0 or len(cur) == 0:
+        raise ValueError("Inputs for PSI calculation must not be empty.")
+
+    percentiles = np.linspace(0, 100, num_bins + 1)
+    bin_edges = np.percentile(ref, percentiles)
+    bin_edges = np.unique(bin_edges)
+    if len(bin_edges) < 2:
+        return {
+            "psi_score": 0.0,
+            "risk_level": "stable",
+            "bins": [],
+        }
+
+    bin_edges[0] = -np.inf
+    bin_edges[-1] = np.inf
+
+    ref_counts, _ = np.histogram(ref, bins=bin_edges)
+    cur_counts, _ = np.histogram(cur, bins=bin_edges)
+
+    ref_len = len(ref)
+    cur_len = len(cur)
+
+    ref_pct = (ref_counts + epsilon) / (ref_len + epsilon * len(ref_counts))
+    cur_pct = (cur_counts + epsilon) / (cur_len + epsilon * len(cur_counts))
+
+    sub_psi = (cur_pct - ref_pct) * np.log(cur_pct / ref_pct)
+    total_psi = float(np.sum(sub_psi))
+
+    if total_psi < 0.10:
+        risk_level = "stable"
+    elif total_psi < 0.25:
+        risk_level = "moderate"
+    else:
+        risk_level = "significant"
+
+    bins_data = []
+    actual_edges = np.percentile(ref, percentiles)
+    for i in range(len(ref_counts)):
+        low = float(actual_edges[i])
+        high = float(actual_edges[min(i + 1, len(actual_edges) - 1)])
+        bins_data.append({
+            "bin_index": i + 1,
+            "label": f"[{low:.2f}, {high:.2f}]",
+            "expected_pct": float(round(ref_counts[i] / ref_len * 100, 2)),
+            "actual_pct": float(round(cur_counts[i] / cur_len * 100, 2)),
+            "sub_psi": float(round(sub_psi[i], 4)),
+        })
+
+    return {
+        "psi_score": float(round(total_psi, 4)),
+        "risk_level": risk_level,
+        "bins": bins_data,
+    }
+
+
+def calculate_wasserstein(
+    reference: np.ndarray,
+    current: np.ndarray,
+) -> float:
+    """Compute Wasserstein-1 distance (Earth Mover's Distance)."""
+    ref = np.asarray(reference, dtype=float).ravel()
+    cur = np.asarray(current, dtype=float).ravel()
+    return float(round(float(wasserstein_distance(ref, cur)), 4))
+
+
 def detect_feature_drift(
     reference,
     current,
@@ -59,13 +142,8 @@ def detect_feature_drift(
     high_threshold=0.30,
 ):
     """
-    Detect feature drift using KS tests with multiple-testing correction.
-
-    The KS statistic measures distributional difference. Adjusted
-    p-values control the false discovery rate across tested features.
-
-    A feature is flagged only when both statistical significance
-    and the configured minimum effect-size threshold are satisfied.
+    Detect feature drift using KS tests with multiple-testing correction,
+    enriched with Population Stability Index (PSI) and Wasserstein Distance.
     """
     reference = np.asarray(reference, dtype=float)
     current = np.asarray(current, dtype=float)
@@ -114,17 +192,31 @@ def detect_feature_drift(
     raw_results = []
 
     for index, feature in enumerate(feature_names):
+        ref_col = reference[:, index]
+        cur_col = current[:, index]
+
         statistic, p_value = ks_2samp(
-            reference[:, index],
-            current[:, index],
+            ref_col,
+            cur_col,
             alternative="two-sided",
             method="auto",
         )
+
+        psi_metrics = calculate_psi(ref_col, cur_col)
+        w_dist = calculate_wasserstein(ref_col, cur_col)
 
         raw_results.append({
             "feature": str(feature),
             "ks_statistic": float(statistic),
             "p_value": float(p_value),
+            "psi": psi_metrics,
+            "wasserstein_distance": w_dist,
+            "summary_stats": {
+                "reference_mean": float(round(float(np.mean(ref_col)), 4)),
+                "current_mean": float(round(float(np.mean(cur_col)), 4)),
+                "reference_std": float(round(float(np.std(ref_col)), 4)),
+                "current_std": float(round(float(np.std(cur_col)), 4)),
+            },
         })
 
     adjusted_p_values, _ = benjamini_hochberg(

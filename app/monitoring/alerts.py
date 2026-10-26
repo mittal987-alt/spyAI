@@ -153,6 +153,13 @@ def save_alerts(
             )
             inserted += cursor.rowcount
 
+    if inserted > 0:
+        try:
+            from app.monitoring.webhooks import dispatch_alerts_to_webhooks
+            dispatch_alerts_to_webhooks(alerts, db_path=db_path)
+        except Exception:
+            pass
+
     return inserted
 
 

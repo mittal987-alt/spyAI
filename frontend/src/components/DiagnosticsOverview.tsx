@@ -1,11 +1,15 @@
 
 import {
   Activity,
+  Bell,
   Brain,
   ChartNoAxesCombined,
   FlaskConical,
+  Layers,
   Search,
+  Shield,
   Sparkles,
+  Zap,
 } from "lucide-react";
 
 const modules = [
@@ -20,6 +24,18 @@ const modules = [
     title: "RAG Evaluation",
     description: "Test retrieval and answer quality",
     icon: FlaskConical,
+  },
+  {
+    href: "#golden-dataset",
+    title: "Golden Benchmarks",
+    description: "Generate synthetic RAG test sets",
+    icon: Layers,
+  },
+  {
+    href: "#guardrails",
+    title: "Prompt Guardrails",
+    description: "Scan jailbreaks, injections & PII",
+    icon: Shield,
   },
   {
     href: "#deep-learning",
@@ -40,10 +56,22 @@ const modules = [
     icon: Activity,
   },
   {
+    href: "#webhooks",
+    title: "Alert Webhooks",
+    description: "Slack, Discord & custom triggers",
+    icon: Bell,
+  },
+  {
     href: "#tabular-experiments",
     title: "Tabular Experiments",
     description: "Run tabular drift analysis",
     icon: Search,
+  },
+  {
+    href: "#drift-simulator",
+    title: "Drift Simulator",
+    description: "Stress-test models with noise & shifts",
+    icon: Zap,
   },
 ];
 

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
   AlertTriangle,
+  Bell,
   Brain,
   ChartNoAxesCombined,
   CheckCircle2,
@@ -11,8 +12,11 @@ import {
   FlaskConical,
   RefreshCw,
   ShieldCheck,
+  Shield,
   Sparkles,
   TrendingUp,
+  Radio,
+  Zap,
 } from "lucide-react";
 import {
   CartesianGrid,
@@ -29,6 +33,7 @@ import type {
   RagDashboardResponse,
   RagHistoryItem,
 } from "./types";
+import { useSSE } from "./hooks/useSSE";
 
 import SystemHealth from "./components/SystemHealth";
 import DiagnosticsOverview from "./components/DiagnosticsOverview";
@@ -39,6 +44,12 @@ import DeepLearningComparison from "./components/DeepLearningComparison";
 import SemanticMonitoring from "./components/SemanticMonitoring";
 import DriftAlerts from "./components/DriftAlerts";
 import TabularExperiment from "./components/TabularExperiment";
+import CSVDriftUpload from "./components/CSVDriftUpload";
+import ExportReport from "./components/ExportReport";
+import PromptGuardrails from "./components/PromptGuardrails";
+import WebhookAlerts from "./components/WebhookAlerts";
+import GoldenDatasetGenerator from "./components/GoldenDatasetGenerator";
+import DriftSimulator from "./components/DriftSimulator";
 
 const metricDefinitions = [
   {
@@ -182,6 +193,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [liveNotification, setLiveNotification] = useState<string | null>(null);
 
   const loadDashboard = useCallback(
     async (showRefreshIndicator = false) => {
@@ -216,6 +228,32 @@ export default function App() {
     },
     [],
   );
+
+  const handleSSEEvent = useCallback(
+    (event: { type: string; [key: string]: any }) => {
+      if (event.type === "rag_evaluated") {
+        const preview = event.query_preview
+          ? `"${event.query_preview}"`
+          : "new run";
+        setLiveNotification(
+          `⚡ Live: New RAG evaluation saved (${preview}) — dashboard auto-refreshed`,
+        );
+        void loadDashboard(true);
+        setTimeout(() => setLiveNotification(null), 5000);
+      } else if (event.type === "drift_completed") {
+        setLiveNotification(
+          `⚡ Live: Drift experiment finished (${event.alert_count ?? 0} alerts) — dashboard auto-refreshed`,
+        );
+        void loadDashboard(true);
+        setTimeout(() => setLiveNotification(null), 5000);
+      }
+    },
+    [loadDashboard],
+  );
+
+  const { status: sseStatus, isConnected: sseConnected } = useSSE({
+    onEvent: handleSSEEvent,
+  });
 
   useEffect(() => {
     void loadDashboard();
@@ -268,7 +306,7 @@ export default function App() {
                 generation quality from one dashboard.
               </p>
 
-              <div className="mt-5 flex flex-wrap gap-2">
+              <div className="mt-5 flex flex-wrap items-center gap-2">
                 <StatusPill variant="success">
                   <Activity size={13} />
                   Diagnostics workspace
@@ -283,6 +321,37 @@ export default function App() {
                   <ShieldCheck size={13} />
                   Model monitoring
                 </StatusPill>
+
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition ${
+                    sseConnected
+                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                      : sseStatus === "connecting"
+                      ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
+                      : "border-slate-700 bg-slate-800/60 text-slate-400"
+                  }`}
+                >
+                  <span className="relative flex h-2 w-2">
+                    {sseConnected && (
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                    )}
+                    <span
+                      className={`relative inline-flex h-2 w-2 rounded-full ${
+                        sseConnected
+                          ? "bg-emerald-400"
+                          : sseStatus === "connecting"
+                          ? "bg-amber-400"
+                          : "bg-slate-500"
+                      }`}
+                    ></span>
+                  </span>
+                  <Radio size={12} />
+                  {sseConnected
+                    ? "Live SSE Active"
+                    : sseStatus === "connecting"
+                    ? "Connecting stream..."
+                    : "Stream Offline"}
+                </span>
               </div>
             </div>
 
@@ -300,8 +369,24 @@ export default function App() {
             </button>
           </div>
 
+          {liveNotification && (
+            <div className="mt-4 flex items-center justify-between rounded-xl border border-cyan-500/40 bg-cyan-950/60 px-4 py-2.5 text-xs font-medium text-cyan-200 shadow-lg shadow-cyan-950/40">
+              <span className="flex items-center gap-2">
+                <Sparkles size={14} className="text-cyan-400 animate-pulse" />
+                {liveNotification}
+              </span>
+              <button
+                type="button"
+                onClick={() => setLiveNotification(null)}
+                className="text-cyan-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {lastUpdated && (
-            <p className="mt-5 text-xs text-slate-500">
+            <p className="mt-4 text-xs text-slate-500">
               Last successful refresh: {lastUpdated}
             </p>
           )}
@@ -626,6 +711,17 @@ export default function App() {
           </div>
         </section>
 
+        {/* Synthetic Golden Dataset Generator */}
+        <section id="golden-dataset" className="mb-10 scroll-mt-6">
+          <SectionHeading
+            icon={Sparkles}
+            title="Synthetic Golden Dataset Generator"
+            description="Auto-synthesize realistic RAG benchmark test cases from documentation with ground-truth attribution and adversarial tests."
+          />
+
+          <GoldenDatasetGenerator />
+        </section>
+
         {/* RAG evaluation */}
         <section id="evaluate" className="mb-10 scroll-mt-6">
           <SectionHeading
@@ -637,6 +733,17 @@ export default function App() {
           <RAGEvaluationForm
             onComplete={() => void loadDashboard(true)}
           />
+        </section>
+
+        {/* Prompt guardrails */}
+        <section id="guardrails" className="mb-10 scroll-mt-6">
+          <SectionHeading
+            icon={Shield}
+            title="Prompt Guardrails & Security Scanner"
+            description="Scan prompts for jailbreak exploits, injection attempts, and PII leakage before LLM ingestion."
+          />
+
+          <PromptGuardrails />
         </section>
 
         {/* RAG comparison */}
@@ -689,6 +796,17 @@ export default function App() {
           <DriftAlerts />
         </section>
 
+        {/* Webhook Alerts */}
+        <section id="webhooks" className="mb-10 scroll-mt-6">
+          <SectionHeading
+            icon={Bell}
+            title="Automated Alert Webhooks"
+            description="Configure Slack, Discord, and HTTP endpoints to automatically dispatch alerts when drift or regressions are detected."
+          />
+
+          <WebhookAlerts />
+        </section>
+
         {/* Tabular experiments */}
         <section id="tabular-experiments" className="mb-10 scroll-mt-6">
           <SectionHeading
@@ -698,6 +816,39 @@ export default function App() {
           />
 
           <TabularExperiment />
+        </section>
+
+        {/* CSV Dataset Drift Upload */}
+        <section id="csv-drift" className="mb-10 scroll-mt-6">
+          <SectionHeading
+            icon={Activity}
+            title="Upload Your Own Dataset for Drift"
+            description="Drag and drop baseline and current CSV files to run KS-test drift detection on your real production data."
+          />
+
+          <CSVDriftUpload />
+        </section>
+
+        {/* Drift & Adversarial Perturbation Simulator */}
+        <section id="drift-simulator" className="mb-10 scroll-mt-6">
+          <SectionHeading
+            icon={Zap}
+            title="Drift & Adversarial Perturbation Simulator"
+            description="Inject mean shifts, variance expansion, Gaussian noise, outlier contamination, and label flips to stress-test your models live."
+          />
+
+          <DriftSimulator />
+        </section>
+
+        {/* Export report */}
+        <section id="export-report" className="mb-10 scroll-mt-6">
+          <SectionHeading
+            icon={CircleHelp}
+            title="Export Diagnostic Report"
+            description="Generate and download a full audit report covering RAG metrics, evaluation history, and drift alerts."
+          />
+
+          <ExportReport />
         </section>
 
         {/* Footer */}
