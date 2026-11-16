@@ -127,6 +127,48 @@ PII_PATTERNS: list[dict[str, Any]] = [
         "mask": "[IP_REDACTED]",
         "severity": "low",
     },
+    {
+        "type": "AADHAAR_NUMBER",
+        "pattern": r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b",
+        "mask": "[AADHAAR_REDACTED]",
+        "severity": "high",
+    },
+    {
+        "type": "PAN_CARD",
+        "pattern": r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
+        "mask": "[PAN_REDACTED]",
+        "severity": "high",
+    },
+    {
+        "type": "IBAN",
+        "pattern": r"\b[A-Z]{2}\d{2}[A-Z0-9]{4}\d{7}([A-Z0-9]?){0,16}\b",
+        "mask": "[IBAN_REDACTED]",
+        "severity": "high",
+    },
+    {
+        "type": "PASSPORT_NUMBER",
+        "pattern": r"\b[A-Z]{1,2}[0-9]{6,9}\b",
+        "mask": "[PASSPORT_REDACTED]",
+        "severity": "high",
+    },
+    {
+        "type": "NPI_NUMBER",
+        "pattern": r"\bNPI[\s:#]?\d{10}\b",
+        "mask": "[NPI_REDACTED]",
+        "severity": "medium",
+    },
+    {
+        "type": "STRIPE_KEY",
+        "pattern": r"\b(sk|pk)_(test|live)_[0-9a-zA-Z]{24,}\b",
+        "mask": "[STRIPE_KEY_REDACTED]",
+        "severity": "high",
+    },
+    {
+        "type": "GOOGLE_API_KEY",
+        "pattern": r"\bAIza[0-9A-Za-z\-_]{35}\b",
+        "mask": "[GOOGLE_KEY_REDACTED]",
+        "severity": "high",
+    },
 ]
 
 

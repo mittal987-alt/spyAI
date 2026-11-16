@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import numpy as np
-import shap
+try:
+    import shap
+except ImportError:
+    shap = None
 import torch
 
 
@@ -54,37 +57,51 @@ def explain_predictions(
 
     model.eval()
 
-    try:
-        explainer = shap.GradientExplainer(model, background)
-        raw_values = explainer.shap_values(explained_samples)
-    except Exception as exc:
-        raise RuntimeError(
-            f"SHAP could not explain this model: {exc}"
-        ) from exc
-
-    # SHAP versions may return either a list per output class or
-    # a single array with an output-class dimension.
-    if isinstance(raw_values, list):
-        class_values = [
-            np.asarray(values, dtype=float)
-            for values in raw_values
-        ]
+    if shap is None:
+        # Fallback to direct PyTorch gradient attribution if SHAP is not installed
+        samples_with_grad = explained_samples.clone().detach().requires_grad_(True)
+        outputs = model(samples_with_grad)
+        if outputs.ndim == 1 or outputs.shape[1] == 1:
+            grad = torch.autograd.grad(outputs.sum(), samples_with_grad)[0]
+            class_values = [grad.detach().cpu().numpy()]
+        else:
+            class_values = []
+            for c in range(outputs.shape[1]):
+                out_c = outputs[:, c].sum()
+                grad_c = torch.autograd.grad(out_c, samples_with_grad, retain_graph=True)[0]
+                class_values.append(grad_c.detach().cpu().numpy())
     else:
-        values = np.asarray(raw_values, dtype=float)
+        try:
+            explainer = shap.GradientExplainer(model, background)
+            raw_values = explainer.shap_values(explained_samples)
+        except Exception as exc:
+            raise RuntimeError(
+                f"SHAP could not explain this model: {exc}"
+            ) from exc
 
-        if values.ndim == 2:
-            # Single-output model: samples x features.
-            class_values = [values]
-        elif values.ndim == 3:
-            # Newer SHAP: samples x features x outputs.
+        # SHAP versions may return either a list per output class or
+        # a single array with an output-class dimension.
+        if isinstance(raw_values, list):
             class_values = [
-                values[:, :, class_index]
-                for class_index in range(values.shape[2])
+                np.asarray(values, dtype=float)
+                for values in raw_values
             ]
         else:
-            raise ValueError(
-                f"Unexpected SHAP output shape: {values.shape}"
-            )
+            values = np.asarray(raw_values, dtype=float)
+
+            if values.ndim == 2:
+                # Single-output model: samples x features.
+                class_values = [values]
+            elif values.ndim == 3:
+                # Newer SHAP: samples x features x outputs.
+                class_values = [
+                    values[:, :, class_index]
+                    for class_index in range(values.shape[2])
+                ]
+            else:
+                raise ValueError(
+                    f"Unexpected SHAP output shape: {values.shape}"
+                )
 
     if not class_values:
         raise ValueError("SHAP returned no feature attributions")

@@ -7,23 +7,163 @@ severity filtering, and live delivery logs.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+import socket
 import sqlite3
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.config import ALERTS_DB_PATH
+from app.config import ALERTS_DB_PATH, WEBHOOK_ALLOW_LOCAL
 
 logger = logging.getLogger(__name__)
 
 VALID_SERVICES = {"slack", "discord", "generic"}
 VALID_SEVERITIES = {"low", "medium", "high"}
 SEVERITY_ORDER = {"low": 1, "medium": 2, "high": 3}
+
+# Forbidden networks for SSRF prevention
+FORBIDDEN_NETWORKS = [
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.0.0.0/24"),
+    ipaddress.ip_network("192.0.2.0/24"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("198.18.0.0/15"),
+    ipaddress.ip_network("198.51.100.0/24"),
+    ipaddress.ip_network("203.0.113.0/24"),
+    ipaddress.ip_network("224.0.0.0/4"),
+    ipaddress.ip_network("240.0.0.0/4"),
+    ipaddress.ip_network("255.255.255.255/32"),
+    # IPv6
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("::/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def is_safe_webhook_url(url: str, allow_local: bool | None = None) -> tuple[bool, str]:
+    """
+    Validate that a webhook URL does not target loopback, private,
+    link-local, or cloud metadata IP addresses (SSRF defense).
+    """
+    if allow_local is None:
+        allow_local = WEBHOOK_ALLOW_LOCAL
+
+    if not url or not isinstance(url, str):
+        return False, "URL must be a non-empty string"
+
+    try:
+        parsed = urllib.parse.urlparse(url.strip())
+    except Exception as exc:
+        return False, f"Could not parse URL: {exc}"
+
+    if parsed.scheme not in ("http", "https"):
+        return False, "Scheme must be http or https"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "URL must include a valid hostname"
+
+    # Reject URLs containing embedded credentials
+    if parsed.username or parsed.password:
+        return False, "URLs with embedded credentials are not allowed"
+
+    if allow_local:
+        return True, "OK"
+
+    lower_host = hostname.lower()
+    if lower_host in ("localhost", "local", "internal") or lower_host.endswith(
+        (".localhost", ".local", ".internal")
+    ):
+        return False, f"Destination '{hostname}' is not permitted"
+
+    # Attempt to parse hostname directly as an IP address
+    try:
+        ip_obj = ipaddress.ip_address(hostname)
+        # Handle NAT64 (RFC 6052: 64:ff9b::/96) translated IPv4
+        if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj in ipaddress.ip_network("64:ff9b::/96"):
+            embedded = ipaddress.IPv4Address(ip_obj.packed[-4:])
+            for net in FORBIDDEN_NETWORKS:
+                if embedded in net:
+                    return False, f"IP address '{hostname}' targets restricted network {net}"
+            if embedded.is_private or embedded.is_loopback or embedded.is_link_local:
+                return False, f"IP address '{hostname}' targets restricted network"
+            return True, "OK"
+
+        for net in FORBIDDEN_NETWORKS:
+            if ip_obj in net:
+                return False, f"IP address '{hostname}' is within restricted network {net}"
+        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+            return False, f"IP address '{hostname}' is restricted"
+        return True, "OK"
+    except ValueError:
+        pass  # Hostname is a domain name, proceed to DNS resolution
+
+    # Resolve domain to all associated IP addresses
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        addr_info = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        return False, f"DNS resolution failed for '{hostname}': {exc}"
+    except Exception as exc:
+        return False, f"Could not resolve host '{hostname}': {exc}"
+
+    if not addr_info:
+        return False, f"No IP address found for host '{hostname}'"
+
+    for entry in addr_info:
+        sockaddr = entry[4]
+        ip_str = sockaddr[0]
+        try:
+            ip_obj = ipaddress.ip_address(ip_str)
+
+            # Handle NAT64 (RFC 6052) translated IPv4
+            if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj in ipaddress.ip_network("64:ff9b::/96"):
+                embedded = ipaddress.IPv4Address(ip_obj.packed[-4:])
+                for net in FORBIDDEN_NETWORKS:
+                    if embedded in net:
+                        return False, f"Resolved IP '{ip_str}' targets restricted network {net}"
+                if embedded.is_private or embedded.is_loopback or embedded.is_link_local:
+                    return False, f"Resolved IP '{ip_str}' targets restricted network"
+                continue
+
+            for net in FORBIDDEN_NETWORKS:
+                if ip_obj in net:
+                    return False, f"Resolved IP '{ip_str}' is within restricted network {net}"
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                return False, f"Resolved IP '{ip_str}' is restricted"
+        except ValueError:
+            return False, f"Invalid IP address format: {ip_str}"
+
+    return True, "OK"
+
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Enforces SSRF validation on any HTTP redirect before following."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        is_safe, reason = is_safe_webhook_url(newurl)
+        if not is_safe:
+            raise urllib.error.HTTPError(
+                newurl,
+                code,
+                f"Redirect to unsafe destination blocked ({reason})",
+                headers,
+                fp,
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def initialize_webhook_tables(db_path: str | Path = ALERTS_DB_PATH) -> None:
@@ -91,6 +231,9 @@ def create_webhook(
         raise ValueError("Webhook name must not be empty.")
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError("Webhook URL must start with http:// or https://")
+    is_safe, reason = is_safe_webhook_url(url)
+    if not is_safe:
+        raise ValueError(f"Webhook URL is not permitted: {reason}")
     if service_type not in VALID_SERVICES:
         raise ValueError(f"service_type must be one of: {VALID_SERVICES}")
     if min_severity not in VALID_SEVERITIES:
@@ -259,9 +402,13 @@ def format_webhook_payload(
 def deliver_webhook(
     url: str,
     payload: dict[str, Any],
-    timeout: float = 6.0,
+    timeout: float = 5.0,
 ) -> tuple[bool, int, str]:
-    """Execute an HTTP POST request to deliver the webhook payload."""
+    """Execute an HTTP POST request to deliver the webhook payload safely."""
+    is_safe, reason = is_safe_webhook_url(url)
+    if not is_safe:
+        return False, 0, f"Blocked unsafe webhook destination: {reason}"
+
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -274,9 +421,10 @@ def deliver_webhook(
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        opener = urllib.request.build_opener(SafeRedirectHandler)
+        with opener.open(req, timeout=timeout) as response:
             status_code = response.getcode()
-            body = response.read().decode("utf-8", errors="ignore")[:300]
+            body = response.read(10240).decode("utf-8", errors="ignore")[:300]
             return True, status_code, body
     except urllib.error.HTTPError as err:
         return False, err.code, str(err.reason)
@@ -413,7 +561,16 @@ def test_webhook_connection(
     service_type: str = "generic",
     name: str = "Test Webhook",
 ) -> dict[str, Any]:
-    """Dispatch a test ping alert to verify connectivity."""
+    """Dispatch a test ping alert to verify connectivity safely."""
+    is_safe, reason = is_safe_webhook_url(url)
+    if not is_safe:
+        return {
+            "success": False,
+            "status_code": 400,
+            "message": f"Webhook URL is not permitted: {reason}",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
     sample_alert = {
         "title": "ModelAutopsy AI — Test Notification",
         "message": "This is a test notification verifying your webhook integration with ModelAutopsy AI platform.",
@@ -425,7 +582,7 @@ def test_webhook_connection(
     }
 
     payload = format_webhook_payload(service_type, sample_alert)
-    success, status_code, response_body = deliver_webhook(url, payload, timeout=7.0)
+    success, status_code, response_body = deliver_webhook(url, payload, timeout=5.0)
 
     return {
         "success": success,

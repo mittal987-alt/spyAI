@@ -1,17 +1,42 @@
 
 import asyncio
+import csv
 import io
 import logging
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, Security, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 import pandas as pd
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+from app.config import (
+    ALLOWED_HOSTS,
+    CORS_ALLOWED_ORIGINS,
+    IS_PRODUCTION,
+    MODELAUTOPSY_API_KEY,
+    RATE_LIMIT_REQUESTS,
+    RATE_LIMIT_WINDOW_SECONDS,
+    validate_production_config,
+)
 
 from app.events import publish, subscribe, unsubscribe
 
+from app.data.explorer import (
+    DatasetExplorerError,
+    _json_value,
+    profile_dataset,
+    read_dataset_csv,
+)
+from app.data.remediation import (
+    apply_dataset_remediation,
+    detect_dataset_outliers,
+    export_dataframe_to_csv_bytes,
+    generate_remediation_plan,
+)
 from app.experiments.run import run_experiment
 from app.monitoring.alerts import get_alert, list_alerts
 from app.deep_learning.service import run_deep_learning_diagnosis
@@ -37,6 +62,15 @@ from app.diagnostics.model_card import (
     generate_model_card,
     format_model_card_markdown,
 )
+from app.diagnostics.hallucination import (
+    evaluate_hallucination,
+    batch_evaluate_hallucination,
+)
+from app.diagnostics.red_teaming import (
+    generate_adversarial_probes,
+    list_attack_archetypes,
+    run_red_team_campaign,
+)
 from app.monitoring.webhooks import (
     create_webhook,
     delete_webhook,
@@ -44,6 +78,17 @@ from app.monitoring.webhooks import (
     list_webhooks,
     test_webhook_connection,
     toggle_webhook,
+)
+from app.monitoring.alert_rules import (
+    create_rule,
+    delete_rule,
+    evaluate_rules,
+    get_rule,
+    get_supported_fields,
+    list_rule_events,
+    list_rules,
+    toggle_rule,
+    update_rule,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,16 +102,113 @@ app = FastAPI(
     version="0.6.1",
 )
 
+import time
+import threading
+from collections import defaultdict, deque
+
+class RateLimitMiddleware:
+    """Sliding-window in-memory rate limiting middleware."""
+    def __init__(self, app, max_requests: int = 100, window_seconds: int = 60):
+        self.app = app
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._clients: dict[str, deque] = defaultdict(deque)
+        self._lock = threading.Lock()
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path in ("/", "/health", "/docs", "/openapi.json"):
+            await self.app(scope, receive, send)
+            return
+
+        client_ip = (scope.get("client") or ("unknown", 0))[0]
+        now = time.time()
+        window_start = now - self.window_seconds
+
+        with self._lock:
+            queue = self._clients[client_ip]
+            while queue and queue[0] < window_start:
+                queue.popleft()
+
+            if len(queue) >= self.max_requests:
+                retry_after = int(queue[0] + self.window_seconds - now) + 1
+                response = JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too Many Requests", "retry_after": retry_after},
+                    headers={"Retry-After": str(retry_after)},
+                )
+                await response(scope, receive, send)
+                return
+
+            queue.append(now)
+
+        await self.app(scope, receive, send)
+
+app.add_middleware(
+    RateLimitMiddleware,
+    max_requests=RATE_LIMIT_REQUESTS,
+    window_seconds=RATE_LIMIT_WINDOW_SECONDS,
+)
+
+# -------------------------------------------------------------------
+# Security Middleware & Error Handling
+# -------------------------------------------------------------------
+
+@app.on_event("startup")
+def validate_config_on_startup():
+    warnings = validate_production_config()
+    for warning in warnings:
+        logger.warning("Security configuration warning: %s", warning)
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global safe exception handler preventing internal traceback leaks."""
+    logger.exception(
+        "Unhandled exception processing %s %s: %s",
+        request.method,
+        request.url.path,
+        type(exc).__name__,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal server error occurred."},
+    )
+
+# Host validation
+if ALLOWED_HOSTS and "*" not in ALLOWED_HOSTS:
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=ALLOWED_HOSTS,
+    )
+
+# CORS configuration
+cors_origins = [o for o in CORS_ALLOWED_ORIGINS if o]
+if "*" in cors_origins and IS_PRODUCTION:
+    cors_origins = [o for o in cors_origins if o != "*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
 )
+
+# Optional API Key Authentication dependency
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+def require_api_key_if_configured(key: str | None = Security(api_key_header)) -> None:
+    """Enforce API key authentication on sensitive operations when configured."""
+    if MODELAUTOPSY_API_KEY:
+        if not key or key != MODELAUTOPSY_API_KEY:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or missing API key (X-API-Key header required).",
+            )
 
 
 # -------------------------------------------------------------------
@@ -161,6 +303,12 @@ class GenerateGoldenDatasetRequest(BaseModel):
     k_retrieved: int = Field(default=5, ge=1, le=10)
 
 
+class SaveGoldenDatasetRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=1000)
+    cases: list[dict[str, Any]] = Field(min_length=1)
+
+
 class SimulateDriftRequest(BaseModel):
     n_samples: int = Field(default=1500, ge=200, le=20000)
     n_features: int = Field(default=10, ge=4, le=100)
@@ -176,6 +324,7 @@ class SimulateDriftRequest(BaseModel):
 
 
 class ModelCardRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
     model_name: str = Field(default="ModelAutopsy Diagnostic Pipeline", max_length=200)
     model_version: str = Field(default="1.0.0", max_length=50)
     model_type: str = Field(default="Hybrid Deep Learning & RAG Evaluation System", max_length=300)
@@ -186,6 +335,37 @@ class ModelCardRequest(BaseModel):
     rag_metrics: dict | None = Field(default=None)
     drift_metrics: dict | None = Field(default=None)
     security_metrics: dict | None = Field(default=None)
+
+
+class ScorecardEntryRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    model_name: str = Field(min_length=1, max_length=200)
+    model_version: str = Field(default="1.0.0", max_length=50)
+    source: str = Field(default="manual")
+    notes: str = Field(default="", max_length=1000)
+    metrics: dict = Field(default_factory=dict)
+
+
+class RegisterModelRequest(BaseModel):
+    model_config = {"protected_namespaces": ()}
+    name: str = Field(min_length=1, max_length=100)
+    version: str = Field(min_length=1, max_length=50)
+    stage: str = Field(default="development")
+    framework: str = Field(default="sklearn")
+    description: str = Field(default="", max_length=1000)
+    artifact_uri: str = Field(default="", max_length=1000)
+    metrics: dict = Field(default_factory=dict)
+    parameters: dict = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
+
+
+class UpdateStageRequest(BaseModel):
+    stage: str
+
+
+class CompareModelsRequest(BaseModel):
+    baseline_id: str
+    candidate_id: str
 
 
 # -------------------------------------------------------------------
@@ -209,7 +389,177 @@ def health():
         "service": "ModelAutopsy AI",
         "version": app.version,
     }
+@app.post("/api/v1/datasets/profile")
+async def profile_uploaded_dataset(
+    file: UploadFile = File(...),
+    preview_rows: int = Query(default=10, ge=1, le=100),
+):
+    """Upload a CSV and return a dataset profile."""
 
+    try:
+        # Read at most 10 MB plus one byte to enforce the size limit.
+        content = await file.read(10 * 1024 * 1024 + 1)
+
+        frame = read_dataset_csv(file.filename, content)
+
+        return profile_dataset(
+            frame,
+            preview_rows=preview_rows,
+        )
+
+    except DatasetExplorerError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    finally:
+        await file.close()
+
+
+@app.post("/api/v1/datasets/report")
+async def download_dataset_report(
+    file: UploadFile = File(...),
+):
+    """Generate a downloadable JSON dataset report."""
+
+    try:
+        content = await file.read(10 * 1024 * 1024 + 1)
+
+        frame = read_dataset_csv(file.filename, content)
+        report = profile_dataset(frame, preview_rows=10)
+
+        return JSONResponse(
+            content=report,
+            headers={
+                "Content-Disposition": (
+                    'attachment; filename="dataset-report.json"'
+                )
+            },
+        )
+
+    except DatasetExplorerError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    finally:
+        await file.close()
+
+
+@app.post("/api/v1/datasets/outliers")
+async def get_dataset_outliers(
+    file: UploadFile = File(...),
+    z_threshold: float = Query(default=3.0, ge=1.0, le=10.0),
+    iqr_multiplier: float = Query(default=1.5, ge=0.5, le=5.0),
+):
+    """Detect statistical and ensemble outliers in an uploaded dataset."""
+    try:
+        content = await file.read(10 * 1024 * 1024 + 1)
+        frame = read_dataset_csv(file.filename, content)
+        return detect_dataset_outliers(
+            frame,
+            z_threshold=z_threshold,
+            iqr_multiplier=iqr_multiplier,
+        )
+    except DatasetExplorerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        await file.close()
+
+
+@app.post("/api/v1/datasets/remediation-plan")
+async def get_dataset_remediation_plan(
+    file: UploadFile = File(...),
+):
+    """Diagnose data quality issues and return an automated remediation plan."""
+    try:
+        content = await file.read(10 * 1024 * 1024 + 1)
+        frame = read_dataset_csv(file.filename, content)
+        return generate_remediation_plan(frame)
+    except DatasetExplorerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        await file.close()
+
+
+@app.post("/api/v1/datasets/remediate")
+async def remediate_dataset(
+    file: UploadFile = File(...),
+    drop_duplicates: bool = Form(default=True),
+    drop_constant_columns: bool = Form(default=True),
+    impute_numeric_strategy: str = Form(default="median"),
+    impute_categorical_strategy: str = Form(default="mode"),
+    clip_outliers: bool = Form(default=False),
+    preview_rows: int = Form(default=10),
+):
+    """Apply cleaning, deduplication, and imputation transformations to dataset."""
+    try:
+        content = await file.read(10 * 1024 * 1024 + 1)
+        frame = read_dataset_csv(file.filename, content)
+
+        cleaned, report = apply_dataset_remediation(
+            frame,
+            drop_duplicates=drop_duplicates,
+            drop_constant_columns=drop_constant_columns,
+            impute_numeric_strategy=impute_numeric_strategy,
+            impute_categorical_strategy=impute_categorical_strategy,
+            clip_outliers=clip_outliers,
+        )
+
+        rows_to_preview = max(1, min(preview_rows, 50))
+        preview = {
+            "columns": [str(c) for c in cleaned.columns],
+            "rows": [
+                [_json_value(v) for v in row]
+                for row in cleaned.head(rows_to_preview).itertuples(index=False, name=None)
+            ],
+        }
+
+        return {
+            "report": report,
+            "preview": preview,
+        }
+    except DatasetExplorerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        await file.close()
+
+
+@app.post("/api/v1/datasets/remediate/export")
+async def export_remediated_csv(
+    file: UploadFile = File(...),
+    drop_duplicates: bool = Form(default=True),
+    drop_constant_columns: bool = Form(default=True),
+    impute_numeric_strategy: str = Form(default="median"),
+    impute_categorical_strategy: str = Form(default="mode"),
+    clip_outliers: bool = Form(default=False),
+):
+    """Apply remediation and stream cleaned CSV bytes as a downloadable attachment."""
+    try:
+        content = await file.read(10 * 1024 * 1024 + 1)
+        frame = read_dataset_csv(file.filename, content)
+
+        cleaned, _ = apply_dataset_remediation(
+            frame,
+            drop_duplicates=drop_duplicates,
+            drop_constant_columns=drop_constant_columns,
+            impute_numeric_strategy=impute_numeric_strategy,
+            impute_categorical_strategy=impute_categorical_strategy,
+            clip_outliers=clip_outliers,
+        )
+
+        csv_bytes = export_dataframe_to_csv_bytes(cleaned)
+        return Response(
+            content=csv_bytes,
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="cleaned-dataset.csv"'},
+        )
+    except DatasetExplorerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        await file.close()
 
 # -------------------------------------------------------------------
 # Experiment and drift endpoints
@@ -305,15 +655,19 @@ def get_alert_summary():
 def get_alerts(
     limit: int = Query(default=50, ge=1, le=500),
     severity: str | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
 ):
     try:
         alerts = list_alerts(
             limit=limit,
             severity=severity,
+            offset=offset,
         )
         return {
             "alerts": alerts,
             "count": len(alerts),
+            "limit": limit,
+            "offset": offset,
         }
     except ValueError as exc:
         raise HTTPException(
@@ -356,6 +710,14 @@ def get_alert_by_id(alert_id: str):
         ) from exc
 
 
+@app.delete("/api/v1/alerts/cleanup", dependencies=[Depends(require_api_key_if_configured)])
+def cleanup_alerts(retention_days: int = Query(default=30, ge=1, le=365)):
+    """Delete alerts older than retention_days days."""
+    from app.monitoring.alerts import cleanup_old_alerts
+    deleted = cleanup_old_alerts(retention_days=retention_days)
+    return {"deleted": deleted, "retention_days": retention_days}
+
+
 # -------------------------------------------------------------------
 # Webhook notification endpoints
 # -------------------------------------------------------------------
@@ -369,7 +731,7 @@ def get_webhooks():
         raise HTTPException(status_code=500, detail="Could not list webhooks") from exc
 
 
-@app.post("/api/v1/webhooks")
+@app.post("/api/v1/webhooks", dependencies=[Depends(require_api_key_if_configured)])
 def add_webhook(request: CreateWebhookRequest):
     try:
         return create_webhook(
@@ -385,7 +747,7 @@ def add_webhook(request: CreateWebhookRequest):
         raise HTTPException(status_code=500, detail="Could not create webhook") from exc
 
 
-@app.patch("/api/v1/webhooks/{webhook_id}")
+@app.patch("/api/v1/webhooks/{webhook_id}", dependencies=[Depends(require_api_key_if_configured)])
 def update_webhook(webhook_id: str, request: ToggleWebhookRequest):
     try:
         updated = toggle_webhook(webhook_id, request.is_enabled)
@@ -399,7 +761,7 @@ def update_webhook(webhook_id: str, request: ToggleWebhookRequest):
         raise HTTPException(status_code=500, detail="Could not toggle webhook") from exc
 
 
-@app.delete("/api/v1/webhooks/{webhook_id}")
+@app.delete("/api/v1/webhooks/{webhook_id}", dependencies=[Depends(require_api_key_if_configured)])
 def remove_webhook(webhook_id: str):
     try:
         deleted = delete_webhook(webhook_id)
@@ -413,7 +775,7 @@ def remove_webhook(webhook_id: str):
         raise HTTPException(status_code=500, detail="Could not delete webhook") from exc
 
 
-@app.post("/api/v1/webhooks/test")
+@app.post("/api/v1/webhooks/test", dependencies=[Depends(require_api_key_if_configured)])
 def test_webhook(request: TestWebhookRequest):
     try:
         return test_webhook_connection(
@@ -616,6 +978,54 @@ def generate_dataset(request: GenerateGoldenDatasetRequest):
         ) from exc
 
 
+@app.post("/api/v1/rag/datasets/save", status_code=201, dependencies=[Depends(require_api_key_if_configured)])
+def api_save_golden_dataset(request: SaveGoldenDatasetRequest):
+    """Save generated golden cases as a named persistent benchmark dataset."""
+    from app.diagnostics.golden_dataset import save_golden_dataset
+    try:
+        return save_golden_dataset(
+            name=request.name,
+            cases=request.cases,
+            description=request.description,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to save golden dataset")
+        raise HTTPException(status_code=500, detail="Failed to save golden dataset.") from exc
+
+
+@app.get("/api/v1/rag/datasets")
+def api_list_golden_datasets(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """List saved golden datasets."""
+    from app.diagnostics.golden_dataset import list_saved_golden_datasets
+    datasets = list_saved_golden_datasets(limit=limit, offset=offset)
+    return {"datasets": datasets, "count": len(datasets), "limit": limit, "offset": offset}
+
+
+@app.get("/api/v1/rag/datasets/{dataset_id}")
+def api_get_golden_dataset(dataset_id: str):
+    """Get full golden dataset with all test cases."""
+    from app.diagnostics.golden_dataset import get_saved_golden_dataset
+    ds = get_saved_golden_dataset(dataset_id)
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return ds
+
+
+@app.delete("/api/v1/rag/datasets/{dataset_id}", dependencies=[Depends(require_api_key_if_configured)])
+def api_delete_golden_dataset(dataset_id: str):
+    """Delete a saved golden dataset."""
+    from app.diagnostics.golden_dataset import delete_saved_golden_dataset
+    deleted = delete_saved_golden_dataset(dataset_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return {"deleted": True, "dataset_id": dataset_id}
+
+
 # -------------------------------------------------------------------
 # RAG evaluation
 # -------------------------------------------------------------------
@@ -635,6 +1045,24 @@ def evaluate_rag(request: RAGEvaluationRequest):
 
         history = save_rag_evaluation(report)
         report["history"] = history
+
+        # Auto-populate scorecard
+        try:
+            from app.monitoring.scorecard import add_scorecard_entry
+            scorecard_metrics = {
+                "precision_at_k": report.get("precision_at_k", 0),
+                "recall_at_k": report.get("recall_at_k", 0),
+                "ndcg_at_k": report.get("ndcg_at_k", 0),
+                "answer_relevance_score": report.get("answer_relevance_score", 0),
+                "context_support_coverage": report.get("context_support_coverage", 0),
+            }
+            add_scorecard_entry(
+                model_name="RAG Pipeline",
+                metrics=scorecard_metrics,
+                source="rag",
+            )
+        except Exception:
+            pass  # Non-fatal
 
         publish("rag_evaluated", {
             "run_id": history.get("run_id", ""),
@@ -762,39 +1190,115 @@ def rag_dashboard(
 
 
 # -------------------------------------------------------------------
-# CSV Dataset Upload — Drift Detection
+# CSV Dataset Upload â€” Drift Detection
 # -------------------------------------------------------------------
 
-_MAX_CSV_BYTES = 10 * 1024 * 1024  # 10 MB per file
-_MAX_FEATURES = 200
+_MAX_CSV_BYTES = 10 * 1024 * 1024  # 10 MB
 _MAX_ROWS = 50_000
+_MAX_COLUMNS = 200
+_MAX_FEATURES = 200
 
 
-def _read_csv_upload(upload: UploadFile, label: str) -> pd.DataFrame:
-    """Read an uploaded CSV file into a DataFrame with basic guards."""
-    raw = upload.file.read()
+def _read_csv_upload(
+    upload: UploadFile,
+    label: str,
+) -> pd.DataFrame:
+    """Read a CSV upload with bounded input, raw header duplicate checks, and safe error messages."""
+
+    raw = upload.file.read(_MAX_CSV_BYTES + 1)
+
+    if not raw:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{label} CSV is empty.",
+        )
+
     if len(raw) > _MAX_CSV_BYTES:
         raise HTTPException(
             status_code=413,
             detail=f"{label} file exceeds the 10 MB limit.",
         )
-    try:
-        df = pd.read_csv(io.BytesIO(raw))
-    except Exception as exc:
+
+    if b"\x00" in raw[:65536]:
         raise HTTPException(
             status_code=422,
-            detail=f"{label} could not be parsed as CSV: {exc}",
+            detail=f"{label} CSV contains invalid null bytes.",
+        )
+
+    # Validate raw headers before Pandas renames duplicate columns
+    try:
+        header_text = raw[:131072].decode("utf-8-sig", errors="replace")
+        first_line = next((line for line in header_text.splitlines() if line.strip()), None)
+        if first_line:
+            reader = csv.reader(io.StringIO(first_line))
+            raw_headers = next(reader, [])
+            if any(not str(h).strip() for h in raw_headers):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{label} contains an empty column name.",
+                )
+            trimmed = [str(h).strip() for h in raw_headers]
+            if len(trimmed) != len(set(trimmed)):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{label} contains duplicate column names.",
+                )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    try:
+        df = pd.read_csv(
+            io.BytesIO(raw),
+            nrows=_MAX_ROWS + 1,
+        )
+    except (
+        pd.errors.ParserError,
+        pd.errors.EmptyDataError,
+        UnicodeDecodeError,
+        ValueError,
+    ) as exc:
+        logger.info(
+            "Invalid CSV upload received for %s: %s",
+            label,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=f"{label} could not be parsed as a valid CSV.",
         ) from exc
+
     if df.empty:
         raise HTTPException(
             status_code=422,
-            detail=f"{label} CSV is empty.",
+            detail=f"{label} CSV must contain at least one data row.",
         )
+
     if len(df) > _MAX_ROWS:
         raise HTTPException(
             status_code=422,
-            detail=f"{label} exceeds {_MAX_ROWS} rows.",
+            detail=f"{label} exceeds the {_MAX_ROWS:,}-row limit.",
         )
+
+    if df.shape[1] > _MAX_COLUMNS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{label} exceeds the {_MAX_COLUMNS}-column limit.",
+        )
+
+    if df.columns.duplicated().any():
+        raise HTTPException(
+            status_code=422,
+            detail=f"{label} contains duplicate column names.",
+        )
+
+    if any(not str(column).strip() for column in df.columns):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{label} contains an empty column name.",
+        )
+
     return df
 
 
@@ -908,7 +1412,7 @@ def generate_report(
             severity_counts[sev] = severity_counts.get(sev, 0) + 1
 
         return {
-            "report_title": "ModelAutopsy AI — Diagnostic Audit Report",
+            "report_title": "ModelAutopsy AI â€” Diagnostic Audit Report",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "service_version": app.version,
             "rag": {
@@ -1060,3 +1564,410 @@ def export_model_card_markdown(request: ModelCardRequest):
     except Exception as exc:
         logger.exception("Model card markdown export failed")
         raise HTTPException(status_code=500, detail="Model card export failed") from exc
+
+# -------------------------------------------------------------------
+# Hallucination Benchmarking
+# -------------------------------------------------------------------
+
+class HallucinationEvalRequest(BaseModel):
+    generated: str = Field(min_length=1, max_length=50000)
+    reference: str = Field(min_length=1, max_length=100000)
+
+
+class HallucinationBatchRequest(BaseModel):
+    pairs: list[HallucinationEvalRequest] = Field(min_length=1, max_length=50)
+
+
+@app.post("/api/v1/hallucination/evaluate")
+def hallucination_evaluate(request: HallucinationEvalRequest):
+    """Evaluate a single LLM output for hallucination against a reference document."""
+    try:
+        return evaluate_hallucination(
+            generated=request.generated,
+            reference=request.reference,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Hallucination evaluation failed")
+        raise HTTPException(status_code=500, detail="Hallucination evaluation failed") from exc
+
+
+@app.post("/api/v1/hallucination/batch")
+def hallucination_batch(request: HallucinationBatchRequest):
+    """Evaluate multiple generated/reference pairs and return aggregated hallucination stats."""
+    try:
+        pairs = [{"generated": p.generated, "reference": p.reference} for p in request.pairs]
+        return batch_evaluate_hallucination(pairs)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Batch hallucination evaluation failed")
+        raise HTTPException(status_code=500, detail="Batch evaluation failed") from exc
+
+
+# -------------------------------------------------------------------
+# Automated LLM Red-Teaming & Adversarial Attack Simulation
+# -------------------------------------------------------------------
+
+class RedTeamGenerateRequest(BaseModel):
+    topic: str = Field(default="bypassing safety guardrails", max_length=500)
+    archetype_ids: list[str] | None = None
+
+
+class RedTeamSimulateRequest(BaseModel):
+    topic: str = Field(default="bypassing safety guardrails", max_length=500)
+    archetype_ids: list[str] | None = None
+    simulated_posture: str = Field(default="balanced")  # "hardened" | "vulnerable" | "balanced"
+    custom_responses: dict[str, str] | None = None
+
+
+@app.get("/api/v1/red-teaming/archetypes")
+def get_red_teaming_archetypes():
+    """List all supported adversarial jailbreak and exploit archetypes."""
+    return {"archetypes": list_attack_archetypes()}
+
+
+@app.post("/api/v1/red-teaming/generate-probes")
+def generate_red_teaming_probes(request: RedTeamGenerateRequest):
+    """Generate tailored adversarial probes for a specific topic or safety target."""
+    try:
+        probes = generate_adversarial_probes(
+            topic=request.topic,
+            archetype_ids=request.archetype_ids,
+        )
+        return {"probes": probes}
+    except Exception as exc:
+        logger.exception("Probe generation failed")
+        raise HTTPException(status_code=500, detail="Probe generation failed") from exc
+
+
+@app.post("/api/v1/red-teaming/simulate")
+def simulate_red_teaming_campaign(request: RedTeamSimulateRequest):
+    """Execute an automated adversarial red-teaming campaign and compute vulnerability scorecard."""
+    try:
+        return run_red_team_campaign(
+            topic=request.topic,
+            archetype_ids=request.archetype_ids,
+            simulated_posture=request.simulated_posture,
+            custom_responses=request.custom_responses,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Red-teaming campaign execution failed")
+        raise HTTPException(status_code=500, detail="Red-teaming campaign failed") from exc
+
+
+# -------------------------------------------------------------------
+# Smart Alert Rules Engine
+# -------------------------------------------------------------------
+
+
+class CreateAlertRuleRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=500)
+    logic: str = Field(default="AND")
+    severity: str = Field(default="medium")
+    conditions: list[dict] = Field(min_length=1, max_length=10)
+
+
+class UpdateAlertRuleRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+    logic: str | None = None
+    severity: str | None = None
+    conditions: list[dict] | None = Field(default=None, max_length=10)
+    is_enabled: bool | None = None
+
+
+class ToggleAlertRuleRequest(BaseModel):
+    is_enabled: bool
+
+
+class EvaluateRulesRequest(BaseModel):
+    event_type: str = Field(default="manual", max_length=100)
+    payload: dict = Field(default_factory=dict)
+
+
+@app.get("/api/v1/alert-rules/fields")
+def get_alert_rule_fields():
+    """Return supported metric fields, operators, and descriptions for building alert rules."""
+    return get_supported_fields()
+
+
+@app.get("/api/v1/alert-rules")
+def get_alert_rules(enabled_only: bool = Query(default=False)):
+    """List all stored alert rules."""
+    try:
+        return {"rules": list_rules(enabled_only=enabled_only)}
+    except Exception as exc:
+        logger.exception("Failed to list alert rules")
+        raise HTTPException(status_code=500, detail="Failed to list alert rules.") from exc
+
+
+@app.post("/api/v1/alert-rules", status_code=201)
+def create_alert_rule(request: CreateAlertRuleRequest):
+    """Create a new smart alert rule with AND/OR condition logic."""
+    try:
+        rule = create_rule(
+            name=request.name,
+            conditions=request.conditions,
+            logic=request.logic,
+            description=request.description,
+            severity=request.severity,
+        )
+        return rule
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to create alert rule")
+        raise HTTPException(status_code=500, detail="Failed to create alert rule.") from exc
+
+
+@app.get("/api/v1/alert-rules/{rule_id}")
+def get_alert_rule(rule_id: str):
+    """Return a single alert rule by ID."""
+    rule = get_rule(rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail=f"Alert rule '{rule_id}' not found.")
+    return rule
+
+
+@app.patch("/api/v1/alert-rules/{rule_id}")
+def update_alert_rule(rule_id: str, request: UpdateAlertRuleRequest):
+    """Update an existing alert rule's name, conditions, logic, or enabled status."""
+    try:
+        return update_rule(
+            rule_id,
+            name=request.name,
+            description=request.description,
+            logic=request.logic,
+            conditions=request.conditions,
+            severity=request.severity,
+            is_enabled=request.is_enabled,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to update alert rule %s", rule_id)
+        raise HTTPException(status_code=500, detail="Failed to update alert rule.") from exc
+
+
+@app.patch("/api/v1/alert-rules/{rule_id}/toggle")
+def toggle_alert_rule(rule_id: str, request: ToggleAlertRuleRequest):
+    """Enable or disable an alert rule."""
+    try:
+        return toggle_rule(rule_id, is_enabled=request.is_enabled)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/v1/alert-rules/{rule_id}")
+def delete_alert_rule(rule_id: str):
+    """Delete an alert rule permanently."""
+    deleted = delete_rule(rule_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Alert rule '{rule_id}' not found.")
+    return {"deleted": True, "rule_id": rule_id}
+
+
+@app.post("/api/v1/alert-rules/evaluate")
+def evaluate_alert_rules(request: EvaluateRulesRequest):
+    """Evaluate all enabled rules against an event payload. Returns matched rules."""
+    try:
+        matched = evaluate_rules(
+            event_type=request.event_type,
+            payload=request.payload,
+        )
+        return {
+            "matched_count": len(matched),
+            "matched_rules": matched,
+        }
+    except Exception as exc:
+        logger.exception("Failed to evaluate alert rules")
+        raise HTTPException(status_code=500, detail="Rule evaluation failed.") from exc
+
+
+@app.get("/api/v1/alert-rules/events/history")
+def get_rule_events(
+    rule_id: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """Return recent rule-fire history, optionally filtered by rule_id."""
+    try:
+        events = list_rule_events(rule_id=rule_id, limit=limit)
+        return {"events": events, "total": len(events)}
+    except Exception as exc:
+        logger.exception("Failed to fetch rule events")
+        raise HTTPException(status_code=500, detail="Failed to fetch rule events.") from exc
+
+
+# -------------------------------------------------------------------
+# Model Scorecard & Leaderboard
+# -------------------------------------------------------------------
+from app.monitoring.scorecard import (
+    add_scorecard_entry,
+    list_scorecard_entries,
+    get_scorecard_entry,
+    delete_scorecard_entry,
+    build_leaderboard,
+    get_score_metadata,
+)
+
+@app.post("/api/v1/scorecard/entries", status_code=201, dependencies=[Depends(require_api_key_if_configured)])
+def create_scorecard_entry(request: ScorecardEntryRequest):
+    """Register a new model scorecard entry with composite scoring."""
+    try:
+        return add_scorecard_entry(
+            model_name=request.model_name,
+            metrics=request.metrics,
+            model_version=request.model_version,
+            source=request.source,
+            notes=request.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to create scorecard entry")
+        raise HTTPException(status_code=500, detail="Failed to create scorecard entry.") from exc
+
+
+@app.get("/api/v1/scorecard/entries")
+def get_scorecard_entries(
+    model_name: str | None = Query(default=None),
+    source: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """List scorecard entries, optionally filtered by model name or source."""
+    try:
+        return {"entries": list_scorecard_entries(model_name=model_name, source=source, limit=limit)}
+    except Exception as exc:
+        logger.exception("Failed to list scorecard entries")
+        raise HTTPException(status_code=500, detail="Failed to list scorecard entries.") from exc
+
+
+@app.get("/api/v1/scorecard/entries/{entry_id}")
+def get_scorecard_entry_by_id(entry_id: str):
+    """Get a single scorecard entry by ID."""
+    entry = get_scorecard_entry(entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Scorecard entry '{entry_id}' not found.")
+    return entry
+
+
+@app.delete("/api/v1/scorecard/entries/{entry_id}", dependencies=[Depends(require_api_key_if_configured)])
+def remove_scorecard_entry(entry_id: str):
+    """Delete a scorecard entry."""
+    deleted = delete_scorecard_entry(entry_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Scorecard entry '{entry_id}' not found.")
+    return {"deleted": True, "entry_id": entry_id}
+
+
+@app.get("/api/v1/scorecard/leaderboard")
+def get_leaderboard():
+    """Get the model quality leaderboard with composite scores, trends, and metric averages."""
+    try:
+        return build_leaderboard()
+    except Exception as exc:
+        logger.exception("Failed to build leaderboard")
+        raise HTTPException(status_code=500, detail="Failed to build leaderboard.") from exc
+
+
+@app.get("/api/v1/scorecard/metadata")
+def get_scorecard_metadata():
+    """Return scoring formula, dimension weights, and descriptions."""
+    return get_score_metadata()
+
+
+# -------------------------------------------------------------------
+# Model Registry & Lifecycle Management
+# -------------------------------------------------------------------
+from app.models.registry import (
+    register_model,
+    list_registered_models,
+    get_registered_model,
+    update_model_stage,
+    delete_registered_model,
+    compare_registered_models,
+)
+
+@app.post("/api/v1/models/registry", status_code=201, dependencies=[Depends(require_api_key_if_configured)])
+def api_register_model(request: RegisterModelRequest):
+    """Register a new model version with metadata, parameters, and metrics."""
+    try:
+        return register_model(
+            name=request.name,
+            version=request.version,
+            stage=request.stage,
+            framework=request.framework,
+            description=request.description,
+            artifact_uri=request.artifact_uri,
+            metrics=request.metrics,
+            parameters=request.parameters,
+            tags=request.tags,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to register model")
+        raise HTTPException(status_code=500, detail="Failed to register model.") from exc
+
+
+@app.get("/api/v1/models/registry")
+def api_list_models(
+    name: str | None = Query(default=None),
+    stage: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """List registered models, optionally filtered by model name or lifecycle stage."""
+    try:
+        models = list_registered_models(name=name, stage=stage, limit=limit, offset=offset)
+        return {"models": models, "count": len(models), "limit": limit, "offset": offset}
+    except Exception as exc:
+        logger.exception("Failed to list models")
+        raise HTTPException(status_code=500, detail="Failed to list models.") from exc
+
+
+@app.get("/api/v1/models/registry/{model_id}")
+def api_get_model(model_id: str):
+    """Get details for a registered model by ID."""
+    model = get_registered_model(model_id)
+    if not model:
+        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found.")
+    return model
+
+
+@app.patch("/api/v1/models/registry/{model_id}/stage", dependencies=[Depends(require_api_key_if_configured)])
+def api_update_stage(model_id: str, request: UpdateStageRequest):
+    """Promote or transition a model's lifecycle stage (development, staging, production, archived)."""
+    try:
+        return update_model_stage(model_id, request.stage)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to update model stage")
+        raise HTTPException(status_code=500, detail="Failed to update model stage.") from exc
+
+
+@app.delete("/api/v1/models/registry/{model_id}", dependencies=[Depends(require_api_key_if_configured)])
+def api_delete_model(model_id: str):
+    """Delete a model from the registry."""
+    deleted = delete_registered_model(model_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found.")
+    return {"deleted": True, "model_id": model_id}
+
+
+@app.post("/api/v1/models/registry/compare")
+def api_compare_models(request: CompareModelsRequest):
+    """Head-to-head comparison between two registered model versions."""
+    try:
+        return compare_registered_models(request.baseline_id, request.candidate_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to compare models")
+        raise HTTPException(status_code=500, detail="Failed to compare models.") from exc

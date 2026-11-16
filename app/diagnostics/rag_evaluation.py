@@ -83,6 +83,7 @@ def evaluate_retrieval(
 
     precision_at_k = true_positives / len(top_documents)
     recall_at_k = true_positives / len(relevant_ids)
+    hit_rate_at_k = 1.0 if true_positives > 0 else 0.0
 
     reciprocal_rank = 0.0
 
@@ -146,6 +147,8 @@ def evaluate_retrieval(
         "precision_at_k": float(precision_at_k),
         "recall_at_k": float(recall_at_k),
         "reciprocal_rank": float(reciprocal_rank),
+        "mrr": float(reciprocal_rank),
+        "hit_rate_at_k": float(hit_rate_at_k),
         "ndcg_at_k": float(ndcg_at_k),
         "mean_pairwise_similarity": mean_pairwise_similarity,
         "redundancy_note": (

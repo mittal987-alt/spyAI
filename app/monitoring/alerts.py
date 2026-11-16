@@ -120,6 +120,15 @@ def save_alerts(
 
     with sqlite3.connect(path) as connection:
         for alert in alerts:
+            # Deduplication: skip if same feature+severity within last 24 hours
+            from datetime import timedelta
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            existing = connection.execute(
+                "SELECT alert_id FROM alerts WHERE feature = ? AND severity = ? AND created_at > ?",
+                (alert["feature"], alert["severity"], cutoff)
+            ).fetchone()
+            if existing:
+                continue
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO alerts (
@@ -166,6 +175,7 @@ def save_alerts(
 def list_alerts(
     limit: int = 50,
     severity: str | None = None,
+    offset: int = 0,
     db_path: str | Path = ALERTS_DB_PATH,
 ) -> list[dict[str, Any]]:
     """Return the newest alerts, optionally filtered by severity."""
@@ -191,8 +201,9 @@ def list_alerts(
         query += " WHERE severity = ?"
         parameters.append(severity)
 
-    query += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
+    query += " ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?"
     parameters.append(limit)
+    parameters.append(offset)
 
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
@@ -233,3 +244,19 @@ def get_alert(
     result = dict(row)
     result["details"] = json.loads(result.pop("details_json"))
     return result
+
+
+def cleanup_old_alerts(
+    retention_days: int = 30,
+    db_path: str | Path = ALERTS_DB_PATH,
+) -> int:
+    """Delete alerts older than retention_days. Returns count deleted."""
+    from datetime import timedelta
+    initialize_alert_db(db_path)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    with sqlite3.connect(db_path) as connection:
+        cursor = connection.execute(
+            "DELETE FROM alerts WHERE created_at < ?",
+            (cutoff,)
+        )
+    return cursor.rowcount

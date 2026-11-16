@@ -209,3 +209,117 @@ def generate_golden_dataset(
         })
 
     return golden_cases
+
+
+# ---------------------------------------------------------------------------
+# Golden Dataset Persistence
+# ---------------------------------------------------------------------------
+
+import json
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+from app.config import PROJECT_ROOT
+
+GOLDEN_DB_PATH = PROJECT_ROOT / "golden_datasets.db"
+
+
+def initialize_golden_db(db_path: str | Path = GOLDEN_DB_PATH) -> None:
+    """Initialize SQLite tables for saved golden benchmark datasets."""
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS golden_datasets (
+                dataset_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                case_count INTEGER NOT NULL DEFAULT 0,
+                cases_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+
+
+def save_golden_dataset(
+    name: str,
+    cases: list[dict[str, Any]],
+    description: str = "",
+    db_path: str | Path = GOLDEN_DB_PATH,
+) -> dict[str, Any]:
+    """Persist a generated golden dataset for regression benchmarking."""
+    initialize_golden_db(db_path)
+    name = name.strip()
+    if not name:
+        raise ValueError("Dataset name must not be empty.")
+    if not cases:
+        raise ValueError("Dataset cases must not be empty.")
+
+    dataset_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO golden_datasets (dataset_id, name, description, case_count, cases_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (dataset_id, name, description, len(cases), json.dumps(cases, default=str), now),
+        )
+
+    return {
+        "dataset_id": dataset_id,
+        "name": name,
+        "description": description,
+        "case_count": len(cases),
+        "created_at": now,
+        "cases": cases,
+    }
+
+
+def list_saved_golden_datasets(
+    limit: int = 50,
+    offset: int = 0,
+    db_path: str | Path = GOLDEN_DB_PATH,
+) -> list[dict[str, Any]]:
+    """List saved golden datasets metadata."""
+    initialize_golden_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT dataset_id, name, description, case_count, created_at FROM golden_datasets ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_saved_golden_dataset(
+    dataset_id: str,
+    db_path: str | Path = GOLDEN_DB_PATH,
+) -> dict[str, Any] | None:
+    """Retrieve full golden dataset by ID including all test cases."""
+    initialize_golden_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM golden_datasets WHERE dataset_id = ?",
+            (dataset_id,),
+        ).fetchone()
+        if not row:
+            return None
+        res = dict(row)
+        res["cases"] = json.loads(res.pop("cases_json", "[]"))
+        return res
+
+
+def delete_saved_golden_dataset(
+    dataset_id: str,
+    db_path: str | Path = GOLDEN_DB_PATH,
+) -> bool:
+    """Delete a saved golden dataset."""
+    initialize_golden_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.execute("DELETE FROM golden_datasets WHERE dataset_id = ?", (dataset_id,))
+        return cursor.rowcount > 0

@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  api:
+    build: .
+    container_name: modelautopsy-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - MODELAUTOPSY_ENV=development
+      - MODELAUTOPSY_RATE_LIMIT=200
+      - MODELAUTOPSY_RATE_WINDOW=60
+      - CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./reports:/app/reports
+      - data-volume:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  data-volume:

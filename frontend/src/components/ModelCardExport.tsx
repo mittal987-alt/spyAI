@@ -1,3 +1,4 @@
+import "./ModelCardExport.css";
 import { useState, useCallback } from "react";
 import {
   Shield,
@@ -10,36 +11,39 @@ import {
   ChevronRight,
   Loader2,
   ClipboardList,
-  Info,
   Award,
+  Info,
 } from "lucide-react";
 
-// ── Types ──────────────────────────────────────────────────────────────────────
+// ── Types matching the REAL backend schema ─────────────────────────────────────
 
-interface ComplianceRequirement {
-  id: string;
-  category: string;
-  description: string;
-  status: "pass" | "warning" | "fail" | "not_applicable";
+interface EuArticleAudit {
+  article: string;
+  status: "PASS" | "WARNING" | "FAIL";
+  evidence: string;
   score: number;
-  notes: string;
-  remediation?: string;
 }
 
-interface FrameworkAudit {
-  framework: string;
-  version: string;
-  overall_score: number;
-  risk_level: string;
-  requirements: ComplianceRequirement[];
-  summary: string;
+interface NistFunction {
+  status: string;
+  evidence: string;
+  score: number;
 }
 
-interface ModelCardData {
+interface IsoControl {
+  clause: string;
+  name: string;
+  status: string;
+  details: string;
+}
+
+interface CardData {
   metadata: {
     report_id: string;
     generated_at: string;
-    schema_version: string;
+    overall_compliance_score: number;
+    overall_compliance_status: string;
+    compliance_rating: string;
   };
   model_overview: {
     name: string;
@@ -48,139 +52,196 @@ interface ModelCardData {
     developer: string;
     intended_use: string;
     out_of_scope_use: string;
+    custom_notes: string;
   };
-  compliance_audits: FrameworkAudit[];
-  overall_compliance_score: number;
-  highest_risk_level: string;
-  executive_summary: string;
-  recommendations: string[];
-  metrics_summary: {
-    rag_included: boolean;
-    drift_included: boolean;
-    security_included: boolean;
+  regulatory_compliance: {
+    eu_ai_act: {
+      framework: string;
+      assigned_risk_tier: string;
+      score: number;
+      status: string;
+      article_audits: EuArticleAudit[];
+    };
+    nist_ai_rmf: {
+      framework: string;
+      score: number;
+      core_functions: Record<string, NistFunction>;
+    };
+    iso_42001: {
+      framework: string;
+      score: number;
+      controls: IsoControl[];
+    };
   };
+  performance_and_robustness: {
+    rag_evaluation: Record<string, unknown>;
+    distribution_drift: Record<string, unknown>;
+    security_guardrails: Record<string, unknown>;
+  };
+  mitigations_and_safeguards: string[];
 }
 
-// ── Sub-components ─────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
-const StatusIcon = ({ status }: { status: string }) => {
-  if (status === "pass")
-    return <CheckCircle className="mc-icon-pass" size={15} />;
-  if (status === "warning")
-    return <AlertTriangle className="mc-icon-warn" size={15} />;
-  if (status === "fail") return <XCircle className="mc-icon-fail" size={15} />;
-  return <Info className="mc-icon-na" size={15} />;
+const statusColor = (s: string) =>
+  s === "PASS" || s === "Compliant" || s === "Implemented" || s === "Verified" || s === "Active"
+    ? "#4ade80"
+    : s === "WARNING" || s === "Conditional Pass"
+    ? "#fbbf24"
+    : "#f87171";
+
+const StatusPill = ({ status }: { status: string }) => {
+  const color = statusColor(status);
+  const icon =
+    status === "PASS" || status === "Compliant" || status === "Implemented" || status === "Verified" || status === "Active" ? (
+      <CheckCircle size={12} />
+    ) : status === "WARNING" || status === "Conditional Pass" ? (
+      <AlertTriangle size={12} />
+    ) : (
+      <XCircle size={12} />
+    );
+  return (
+    <span className="mc-status-pill" style={{ color, borderColor: color + "44", background: color + "14" }}>
+      {icon} {status}
+    </span>
+  );
 };
 
-const ScoreRing = ({
-  score,
-  size = 90,
-  risk,
-}: {
-  score: number;
-  size?: number;
-  risk: string;
-}) => {
-  const r = (size - 12) / 2;
+const ScoreRing = ({ score, size = 100, label }: { score: number; size?: number; label?: string }) => {
+  const r = (size - 14) / 2;
   const circ = 2 * Math.PI * r;
   const offset = circ - (score / 100) * circ;
-  const color =
-    score >= 80 ? "#22c55e" : score >= 55 ? "#f59e0b" : "#ef4444";
+  const color = score >= 85 ? "#22c55e" : score >= 65 ? "#f59e0b" : "#ef4444";
   return (
     <div className="mc-score-ring" style={{ width: size, height: size }}>
       <svg width={size} height={size}>
+        <circle cx={size / 2} cy={size / 2} r={r} stroke="#1e293b" strokeWidth={12} fill="none" />
         <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          stroke="#1e293b"
-          strokeWidth={10}
-          fill="none"
-        />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          stroke={color}
-          strokeWidth={10}
-          fill="none"
-          strokeDasharray={circ}
-          strokeDashoffset={offset}
+          cx={size / 2} cy={size / 2} r={r}
+          stroke={color} strokeWidth={12} fill="none"
+          strokeDasharray={circ} strokeDashoffset={offset}
           strokeLinecap="round"
-          style={{ transform: "rotate(-90deg)", transformOrigin: "50% 50%" }}
+          style={{ transform: "rotate(-90deg)", transformOrigin: "50% 50%", transition: "stroke-dashoffset 0.6s ease" }}
         />
       </svg>
       <div className="mc-score-ring-label">
-        <span className="mc-score-num" style={{ color }}>
-          {score}
-        </span>
-        <span className="mc-score-risk">{risk}</span>
+        <span className="mc-score-num" style={{ color }}>{score}</span>
+        {label && <span className="mc-score-sub">{label}</span>}
       </div>
     </div>
   );
 };
 
-const RequirementRow = ({ req }: { req: ComplianceRequirement }) => {
-  const [open, setOpen] = useState(false);
+// ── Section blocks ─────────────────────────────────────────────────────────────
+
+const EuPanel = ({ eu }: { eu: CardData["regulatory_compliance"]["eu_ai_act"] }) => {
+  const [open, setOpen] = useState(true);
   return (
-    <div className={`mc-req-row mc-req-${req.status}`}>
-      <button className="mc-req-header" onClick={() => setOpen(!open)}>
-        <div className="mc-req-left">
-          <StatusIcon status={req.status} />
-          <span className="mc-req-cat">{req.category}</span>
-          <span className="mc-req-desc">{req.description}</span>
+    <div className="mc-fw-panel">
+      <button className="mc-fw-header" onClick={() => setOpen(v => !v)}>
+        <div className="mc-fw-left">
+          <Award size={16} />
+          <div>
+            <span className="mc-fw-name">EU AI Act</span>
+            <span className="mc-fw-ver">Regulation 2024/1689</span>
+          </div>
         </div>
-        <div className="mc-req-right">
-          <span className="mc-req-score">{req.score}%</span>
-          {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <div className="mc-fw-right">
+          <span className="mc-fw-score-badge">{eu.score}%</span>
+          <StatusPill status={eu.status} />
+          {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
         </div>
       </button>
       {open && (
-        <div className="mc-req-body">
-          <p className="mc-req-notes">{req.notes}</p>
-          {req.remediation && (
-            <p className="mc-req-remediation">
-              <strong>Remediation:</strong> {req.remediation}
-            </p>
-          )}
+        <div className="mc-fw-body">
+          <p className="mc-fw-tier">Risk Tier: <strong>{eu.assigned_risk_tier}</strong></p>
+          <table className="mc-table">
+            <thead>
+              <tr><th>Article</th><th>Result</th><th>Score</th><th>Evidence</th></tr>
+            </thead>
+            <tbody>
+              {eu.article_audits.map((a, i) => (
+                <tr key={i}>
+                  <td className="mc-td-article">{a.article}</td>
+                  <td><StatusPill status={a.status} /></td>
+                  <td className="mc-td-score">{a.score}%</td>
+                  <td className="mc-td-evidence">{a.evidence}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
   );
 };
 
-const FrameworkPanel = ({ audit }: { audit: FrameworkAudit }) => {
+const NistPanel = ({ nist }: { nist: CardData["regulatory_compliance"]["nist_ai_rmf"] }) => {
   const [open, setOpen] = useState(true);
-  const passCount = audit.requirements.filter((r) => r.status === "pass").length;
-  const warnCount = audit.requirements.filter(
-    (r) => r.status === "warning"
-  ).length;
-  const failCount = audit.requirements.filter((r) => r.status === "fail").length;
-
   return (
-    <div className="mc-framework-panel">
-      <button className="mc-framework-header" onClick={() => setOpen(!open)}>
+    <div className="mc-fw-panel">
+      <button className="mc-fw-header" onClick={() => setOpen(v => !v)}>
         <div className="mc-fw-left">
-          <Award size={18} />
+          <Shield size={16} />
           <div>
-            <span className="mc-fw-name">{audit.framework}</span>
-            <span className="mc-fw-version">v{audit.version}</span>
+            <span className="mc-fw-name">NIST AI RMF</span>
+            <span className="mc-fw-ver">AI RMF 1.0</span>
           </div>
         </div>
         <div className="mc-fw-right">
-          <span className="mc-fw-tag mc-tag-pass">✓ {passCount}</span>
-          <span className="mc-fw-tag mc-tag-warn">⚠ {warnCount}</span>
-          <span className="mc-fw-tag mc-tag-fail">✗ {failCount}</span>
-          <ScoreRing score={audit.overall_score} size={70} risk={audit.risk_level} />
-          {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          <span className="mc-fw-score-badge">{nist.score}%</span>
+          {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
         </div>
       </button>
       {open && (
-        <div className="mc-framework-body">
-          <p className="mc-fw-summary">{audit.summary}</p>
-          <div className="mc-req-list">
-            {audit.requirements.map((r) => (
-              <RequirementRow key={r.id} req={r} />
+        <div className="mc-fw-body">
+          <div className="mc-nist-grid">
+            {Object.entries(nist.core_functions).map(([fn, data]) => (
+              <div key={fn} className="mc-nist-card">
+                <div className="mc-nist-fn">{fn}</div>
+                <div className="mc-nist-status">
+                  <StatusPill status={data.status} />
+                </div>
+                <div className="mc-nist-score">{data.score}%</div>
+                <p className="mc-nist-evidence">{data.evidence}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const IsoPanel = ({ iso }: { iso: CardData["regulatory_compliance"]["iso_42001"] }) => {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="mc-fw-panel">
+      <button className="mc-fw-header" onClick={() => setOpen(v => !v)}>
+        <div className="mc-fw-left">
+          <Info size={16} />
+          <div>
+            <span className="mc-fw-name">ISO/IEC 42001</span>
+            <span className="mc-fw-ver">AI Management System 2023</span>
+          </div>
+        </div>
+        <div className="mc-fw-right">
+          <span className="mc-fw-score-badge">{iso.score}%</span>
+          {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+        </div>
+      </button>
+      {open && (
+        <div className="mc-fw-body">
+          <div className="mc-iso-list">
+            {iso.controls.map((ctrl, i) => (
+              <div key={i} className="mc-iso-row">
+                <div className="mc-iso-clause">§{ctrl.clause}</div>
+                <div className="mc-iso-info">
+                  <span className="mc-iso-name">{ctrl.name}</span>
+                  <p className="mc-iso-details">{ctrl.details}</p>
+                </div>
+                <StatusPill status={ctrl.status} />
+              </div>
             ))}
           </div>
         </div>
@@ -209,271 +270,160 @@ export default function ModelCardExport() {
     model_version: "1.0.0",
     model_type: "Hybrid Deep Learning & RAG Evaluation System",
     developer_or_team: "AI Reliability & MLOps Engineering Team",
-    intended_use:
-      "Production AI model diagnostics, drift tracking, retrieval evaluation, and adversarial security auditing.",
-    out_of_scope_use:
-      "Autonomous safety-critical decisions without human verification.",
+    intended_use: "Production AI model diagnostics, drift tracking, retrieval evaluation, and adversarial security auditing.",
+    out_of_scope_use: "Autonomous safety-critical decisions without human verification.",
     custom_notes: "",
   });
-  const [card, setCard] = useState<ModelCardData | null>(null);
+
+  const [card, setCard] = useState<CardData | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleInput = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
-  ) => {
-    setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
-  };
+  const handleInput = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    setForm(f => ({ ...f, [e.target.name]: e.target.value }));
 
-  const generate = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    setCard(null);
+  const runAudit = useCallback(async () => {
+    setLoading(true); setError(null); setCard(null);
     try {
       const res = await fetch(`${API}/api/v1/compliance/model-card`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error(d.detail ?? `HTTP ${res.status}`);
-      }
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.detail ?? `HTTP ${res.status}`); }
       setCard(await res.json());
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setLoading(false); }
   }, [form]);
 
-  const downloadMarkdown = useCallback(async () => {
+  const downloadMd = useCallback(async () => {
     setDownloading(true);
     try {
-      const res = await fetch(
-        `${API}/api/v1/compliance/model-card/markdown`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form),
-        }
-      );
+      const res = await fetch(`${API}/api/v1/compliance/model-card/markdown`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      const cd = res.headers.get("Content-Disposition") ?? "";
-      const match = cd.match(/filename=([^\s;]+)/);
-      a.download = match?.[1] ?? "model-card.md";
+      const cd = res.headers.get("content-disposition") ?? "";
+      const m = cd.match(/filename=([^\s;]+)/);
+      a.download = m?.[1] ?? "model-card.md";
       a.click();
       URL.revokeObjectURL(url);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setDownloading(false);
-    }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setDownloading(false); }
   }, [form]);
 
-  const riskColor: Record<string, string> = {
-    Low: "#22c55e",
-    Medium: "#f59e0b",
-    High: "#f97316",
-    Critical: "#ef4444",
-  };
+  const ratingColor: Record<string, string> = { A: "#22c55e", B: "#f59e0b", C: "#ef4444" };
 
   return (
     <div className="mc-root">
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="mc-header">
-        <div className="mc-header-icon">
-          <Shield size={26} />
-        </div>
+        <div className="mc-header-icon"><Shield size={26} /></div>
         <div>
           <h1 className="mc-title">Model Card & Regulatory Compliance</h1>
           <p className="mc-subtitle">
-            Auto-generates an audited model card aligned with EU AI Act, NIST AI
-            RMF, and ISO/IEC 42001
+            Generate an audited model card aligned with EU AI Act, NIST AI RMF, and ISO/IEC 42001
           </p>
         </div>
       </div>
 
       <div className="mc-layout">
-        {/* ── Left: Form ── */}
+        {/* ── Form ── */}
         <div className="mc-form-panel">
-          <div className="mc-section-label">
-            <ClipboardList size={15} />
-            Model Metadata
-          </div>
+          <div className="mc-section-label"><ClipboardList size={14} />Model Metadata</div>
 
-          {(
-            [
-              { name: "model_name", label: "Model Name" },
-              { name: "model_version", label: "Version" },
-              { name: "model_type", label: "Model Type" },
-              { name: "developer_or_team", label: "Developer / Team" },
-            ] as { name: keyof FormState; label: string }[]
-          ).map(({ name, label }) => (
+          {(["model_name","model_version","model_type","developer_or_team"] as (keyof FormState)[]).map(name => (
             <label key={name} className="mc-label">
-              {label}
-              <input
-                className="mc-input"
-                name={name}
-                value={form[name]}
-                onChange={handleInput}
-              />
+              {name.replace(/_/g," ").replace(/\b\w/g,c=>c.toUpperCase())}
+              <input className="mc-input" name={name} value={form[name]} onChange={handleInput} />
             </label>
           ))}
 
           <label className="mc-label">
             Intended Use
-            <textarea
-              className="mc-textarea"
-              name="intended_use"
-              value={form.intended_use}
-              onChange={handleInput}
-              rows={3}
-            />
+            <textarea className="mc-textarea" name="intended_use" value={form.intended_use} onChange={handleInput} rows={3} />
           </label>
 
           <label className="mc-label">
             Out-of-Scope Use
-            <textarea
-              className="mc-textarea"
-              name="out_of_scope_use"
-              value={form.out_of_scope_use}
-              onChange={handleInput}
-              rows={2}
-            />
+            <textarea className="mc-textarea" name="out_of_scope_use" value={form.out_of_scope_use} onChange={handleInput} rows={2} />
           </label>
 
           <label className="mc-label">
             Additional Notes
-            <textarea
-              className="mc-textarea"
-              name="custom_notes"
-              value={form.custom_notes}
-              onChange={handleInput}
-              rows={3}
-              placeholder="Fairness constraints, data governance policies, training details…"
-            />
+            <textarea className="mc-textarea" name="custom_notes" value={form.custom_notes} onChange={handleInput} rows={2}
+              placeholder="Fairness constraints, data governance, training details…" />
           </label>
 
-          <button
-            className="mc-btn-generate"
-            onClick={generate}
-            disabled={loading}
-          >
-            {loading ? (
-              <>
-                <Loader2 size={16} className="mc-spin" />
-                Auditing…
-              </>
-            ) : (
-              <>
-                <Shield size={16} />
-                Run Compliance Audit
-              </>
-            )}
+          <button className="mc-btn-generate" onClick={runAudit} disabled={loading}>
+            {loading ? <><Loader2 size={15} className="mc-spin" /> Auditing…</> : <><Shield size={15} /> Run Compliance Audit</>}
           </button>
 
           {error && <div className="mc-error">{error}</div>}
         </div>
 
-        {/* ── Right: Results ── */}
+        {/* ── Results ── */}
         <div className="mc-results-panel">
           {!card && !loading && (
             <div className="mc-empty">
-              <Shield size={54} className="mc-empty-icon" />
-              <p>Fill in model metadata and run the audit to generate a compliance report.</p>
+              <Shield size={52} className="mc-empty-icon" />
+              <p>Configure model metadata and run the audit to generate a full compliance report.</p>
               <ul className="mc-framework-list">
-                <li>🇪🇺 EU AI Act — Risk classification & transparency</li>
-                <li>🛡️ NIST AI RMF — Govern, Map, Measure, Manage</li>
-                <li>📋 ISO/IEC 42001 — AI Management System</li>
+                <li>🇪🇺 <strong>EU AI Act</strong> — Risk classification, transparency, human oversight</li>
+                <li>🛡️ <strong>NIST AI RMF</strong> — Govern, Map, Measure, Manage</li>
+                <li>📋 <strong>ISO/IEC 42001</strong> — AI Management System controls</li>
               </ul>
             </div>
           )}
 
           {loading && (
             <div className="mc-loading">
-              <Loader2 size={42} className="mc-spin" />
+              <Loader2 size={44} className="mc-spin" />
               <p>Running regulatory compliance audit…</p>
             </div>
           )}
 
           {card && (
             <>
-              {/* ── Overall Score Bar ── */}
+              {/* Overall badge */}
               <div className="mc-overall-card">
                 <div className="mc-overall-left">
-                  <ScoreRing
-                    score={card.overall_compliance_score}
-                    size={110}
-                    risk={card.highest_risk_level}
-                  />
+                  <ScoreRing score={card.metadata.overall_compliance_score} size={112} label={card.metadata.overall_compliance_status.replace(/_/g," ")} />
                   <div className="mc-overall-meta">
-                    <h2 className="mc-overall-title">
-                      {card.model_overview.name}
-                    </h2>
-                    <p className="mc-overall-sub">
-                      v{card.model_overview.version} &nbsp;·&nbsp;{" "}
-                      {card.model_overview.type}
-                    </p>
-                    <p className="mc-overall-id">
-                      Report {card.metadata.report_id}
-                    </p>
-                    <div className="mc-risk-badge" style={{ background: riskColor[card.highest_risk_level] ?? "#6366f1" }}>
-                      {card.highest_risk_level} Risk
-                    </div>
+                    <h2 className="mc-overall-title">{card.model_overview.name}</h2>
+                    <p className="mc-overall-sub">v{card.model_overview.version} · {card.model_overview.type}</p>
+                    <p className="mc-overall-id">Report: {card.metadata.report_id} · {card.metadata.generated_at.slice(0,10)}</p>
+                    <span className="mc-rating-badge" style={{ background: ratingColor[card.metadata.compliance_rating] ?? "#6366f1" }}>
+                      Rating {card.metadata.compliance_rating}
+                    </span>
                   </div>
                 </div>
-                <button
-                  className="mc-btn-download"
-                  onClick={downloadMarkdown}
-                  disabled={downloading}
-                >
-                  {downloading ? (
-                    <Loader2 size={15} className="mc-spin" />
-                  ) : (
-                    <Download size={15} />
-                  )}
+                <button className="mc-btn-dl" onClick={downloadMd} disabled={downloading}>
+                  {downloading ? <Loader2 size={14} className="mc-spin" /> : <Download size={14} />}
                   Export .md
                 </button>
               </div>
 
-              {/* ── Executive Summary ── */}
-              <div className="mc-exec-summary">
-                <div className="mc-section-label">
-                  <FileText size={14} />
-                  Executive Summary
-                </div>
-                <p>{card.executive_summary}</p>
+              {/* Framework audits */}
+              <div className="mc-section-label" style={{ marginTop: "1rem" }}>
+                <Award size={14} /> Framework Audits
               </div>
+              <EuPanel eu={card.regulatory_compliance.eu_ai_act} />
+              <NistPanel nist={card.regulatory_compliance.nist_ai_rmf} />
+              <IsoPanel iso={card.regulatory_compliance.iso_42001} />
 
-              {/* ── Recommendations ── */}
-              {card.recommendations.length > 0 && (
-                <div className="mc-recommendations">
-                  <div className="mc-section-label">
-                    <AlertTriangle size={14} />
-                    Top Recommendations
-                  </div>
-                  <ul>
-                    {card.recommendations.map((r, i) => (
-                      <li key={i}>{r}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* ── Framework Panels ── */}
-              <div className="mc-section-label" style={{ marginTop: "1.25rem" }}>
-                <Award size={14} />
-                Framework Audits
+              {/* Mitigations */}
+              <div className="mc-mitigations">
+                <div className="mc-section-label"><FileText size={14} />Mitigations &amp; Safeguards</div>
+                <ul>{card.mitigations_and_safeguards.map((m, i) => <li key={i}>{m}</li>)}</ul>
               </div>
-              {card.compliance_audits.map((a) => (
-                <FrameworkPanel key={a.framework} audit={a} />
-              ))}
             </>
           )}
         </div>

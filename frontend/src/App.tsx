@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   CircleHelp,
   Database,
+  Flame,
   FlaskConical,
   RefreshCw,
   ShieldCheck,
@@ -38,6 +39,7 @@ import { useSSE } from "./hooks/useSSE";
 import SystemHealth from "./components/SystemHealth";
 import DiagnosticsOverview from "./components/DiagnosticsOverview";
 import RAGEvaluationForm from "./components/RAGEvaluationForm";
+import DatasetExplorer from "./components/DatasetExplorer";
 import RAGComparison from "./components/RAGComparison";
 import DeepLearningDiagnosis from "./components/DeepLearningDiagnosis";
 import DeepLearningComparison from "./components/DeepLearningComparison";
@@ -47,9 +49,13 @@ import TabularExperiment from "./components/TabularExperiment";
 import CSVDriftUpload from "./components/CSVDriftUpload";
 import ExportReport from "./components/ExportReport";
 import PromptGuardrails from "./components/PromptGuardrails";
+import RedTeamingSuite from "./components/RedTeamingSuite";
 import WebhookAlerts from "./components/WebhookAlerts";
 import GoldenDatasetGenerator from "./components/GoldenDatasetGenerator";
 import DriftSimulator from "./components/DriftSimulator";
+import ModelCardExport from "./components/ModelCardExport";
+import HallucinationBenchmark from "./components/HallucinationBenchmark";
+import AlertRulesEngine from "./components/AlertRulesEngine";
 
 const metricDefinitions = [
   {
@@ -746,6 +752,17 @@ export default function App() {
           <PromptGuardrails />
         </section>
 
+        {/* Automated LLM Red-Teaming Suite */}
+        <section id="red-teaming" className="mb-10 scroll-mt-6">
+          <SectionHeading
+            icon={Flame}
+            title="Automated LLM Red-Teaming & Jailbreaks"
+            description="Actively attack and probe your LLMs across 6+ adversarial exploit archetypes to compute a comprehensive vulnerability scorecard."
+          />
+
+          <RedTeamingSuite />
+        </section>
+
         {/* RAG comparison */}
         <section id="rag-comparison" className="mb-10 scroll-mt-6">
           <SectionHeading
@@ -807,6 +824,17 @@ export default function App() {
           <WebhookAlerts />
         </section>
 
+        {/* Smart Alert Rules Engine */}
+        <section id="alert-rules" className="mb-10 scroll-mt-6">
+          <SectionHeading
+            icon={Zap}
+            title="Smart Alert Rules Engine"
+            description="Define threshold-based rules with AND/OR logic across drift, RAG, and hallucination metrics. Rules auto-fire on matching events and dispatch to your configured webhooks."
+          />
+
+          <AlertRulesEngine />
+        </section>
+
         {/* Tabular experiments */}
         <section id="tabular-experiments" className="mb-10 scroll-mt-6">
           <SectionHeading
@@ -816,6 +844,11 @@ export default function App() {
           />
 
           <TabularExperiment />
+        </section>
+
+        {/* Dataset Explorer */}
+        <section id="dataset-explorer" className="mb-10 scroll-mt-6">
+          <DatasetExplorer />
         </section>
 
         {/* CSV Dataset Drift Upload */}
@@ -838,6 +871,28 @@ export default function App() {
           />
 
           <DriftSimulator />
+        </section>
+
+        {/* Hallucination Benchmarking */}
+        <section id="hallucination" className="mb-10 scroll-mt-6">
+          <SectionHeading
+            icon={Brain}
+            title="LLM Hallucination Benchmarking"
+            description="Score generated answers for factual consistency using ROUGE, bigram novelty, claim entailment, and a composite 0–100 hallucination risk score."
+          />
+
+          <HallucinationBenchmark />
+        </section>
+
+        {/* Model Card & Regulatory Compliance */}
+        <section id="model-card" className="mb-10 scroll-mt-6">
+          <SectionHeading
+            icon={Shield}
+            title="Model Card & Regulatory Compliance"
+            description="Auto-generate an audited model card covering EU AI Act, NIST AI RMF, and ISO/IEC 42001 requirements — with one-click Markdown export."
+          />
+
+          <ModelCardExport />
         </section>
 
         {/* Export report */}

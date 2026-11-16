@@ -4,10 +4,13 @@ import {
   Bell,
   Brain,
   ChartNoAxesCombined,
+  FileSpreadsheet,
+  Flame,
   FlaskConical,
   Layers,
   Search,
   Shield,
+  ShieldCheck,
   Sparkles,
   Zap,
 } from "lucide-react";
@@ -38,6 +41,12 @@ const modules = [
     icon: Shield,
   },
   {
+    href: "#red-teaming",
+    title: "Red-Teaming Suite",
+    description: "Adversarial jailbreaks & exploit attack suite",
+    icon: Flame,
+  },
+  {
     href: "#deep-learning",
     title: "Deep Learning",
     description: "Diagnose and compare neural networks",
@@ -62,6 +71,18 @@ const modules = [
     icon: Bell,
   },
   {
+    href: "#alert-rules",
+    title: "Smart Alert Rules",
+    description: "Threshold rules with AND/OR logic on any metric",
+    icon: Zap,
+  },
+  {
+    href: "#dataset-explorer",
+    title: "Dataset Explorer",
+    description: "Profile CSVs, feature stats & quality",
+    icon: FileSpreadsheet,
+  },
+  {
     href: "#tabular-experiments",
     title: "Tabular Experiments",
     description: "Run tabular drift analysis",
@@ -72,6 +93,12 @@ const modules = [
     title: "Drift Simulator",
     description: "Stress-test models with noise & shifts",
     icon: Zap,
+  },
+  {
+    href: "#model-card",
+    title: "Model Card & Compliance",
+    description: "EU AI Act, NIST AI RMF, ISO 42001 audit",
+    icon: ShieldCheck,
   },
 ];
 
