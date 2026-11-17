@@ -44,15 +44,16 @@ SCORECARD_DB = PROJECT_ROOT / "scorecard.db"
 
 # ── DB init ─────────────────────────────────────────────────────────────────
 
-def _connect(db_path: str | Path = SCORECARD_DB):
-    path = Path(db_path)
+def _connect(db_path: str | Path | None = None):
+    path = Path(db_path or SCORECARD_DB)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def initialize_scorecard_db(db_path: str | Path = SCORECARD_DB) -> None:
+def initialize_scorecard_db(db_path: str | Path | None = None) -> None:
+    db_path = db_path or SCORECARD_DB
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -154,9 +155,10 @@ def add_scorecard_entry(
     model_version: str = "1.0.0",
     source: str = "manual",
     notes: str = "",
-    db_path: str | Path = SCORECARD_DB,
+    db_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Save a new scorecard entry and return it."""
+    db_path = db_path or SCORECARD_DB
     initialize_scorecard_db(db_path)
 
     model_name = model_name.strip()
@@ -196,9 +198,10 @@ def list_scorecard_entries(
     model_name: str | None = None,
     source: str | None = None,
     limit: int = 100,
-    db_path: str | Path = SCORECARD_DB,
+    db_path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """Return all entries, optionally filtered."""
+    db_path = db_path or SCORECARD_DB
     initialize_scorecard_db(db_path)
 
     query = "SELECT * FROM scorecard_entries"
@@ -226,8 +229,9 @@ def list_scorecard_entries(
 
 def get_scorecard_entry(
     entry_id: str,
-    db_path: str | Path = SCORECARD_DB,
+    db_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
+    db_path = db_path or SCORECARD_DB
     initialize_scorecard_db(db_path)
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -238,8 +242,9 @@ def get_scorecard_entry(
 
 def delete_scorecard_entry(
     entry_id: str,
-    db_path: str | Path = SCORECARD_DB,
+    db_path: str | Path | None = None,
 ) -> bool:
+    db_path = db_path or SCORECARD_DB
     initialize_scorecard_db(db_path)
     with _connect(db_path) as conn:
         cursor = conn.execute(
@@ -250,7 +255,8 @@ def delete_scorecard_entry(
 
 # ── Leaderboard aggregation ───────────────────────────────────────────────────
 
-def build_leaderboard(db_path: str | Path = SCORECARD_DB) -> dict[str, Any]:
+def build_leaderboard(db_path: str | Path | None = None) -> dict[str, Any]:
+    db_path = db_path or SCORECARD_DB
     """
     Aggregate all entries by model_name.
     For each model, compute:

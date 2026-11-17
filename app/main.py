@@ -1,5 +1,6 @@
 
 import asyncio
+from contextlib import asynccontextmanager
 import csv
 import io
 import logging
@@ -93,6 +94,13 @@ from app.monitoring.alert_rules import (
 
 logger = logging.getLogger(__name__)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    warnings = validate_production_config()
+    for warning in warnings:
+        logger.warning("Security configuration warning: %s", warning)
+    yield
+
 app = FastAPI(
     title="ModelAutopsy AI",
     description=(
@@ -100,6 +108,7 @@ app = FastAPI(
         "semantic drift detection, and RAG evaluation."
     ),
     version="0.6.1",
+    lifespan=lifespan,
 )
 
 import time
@@ -158,11 +167,6 @@ app.add_middleware(
 # Security Middleware & Error Handling
 # -------------------------------------------------------------------
 
-@app.on_event("startup")
-def validate_config_on_startup():
-    warnings = validate_production_config()
-    for warning in warnings:
-        logger.warning("Security configuration warning: %s", warning)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -366,6 +370,12 @@ class UpdateStageRequest(BaseModel):
 class CompareModelsRequest(BaseModel):
     baseline_id: str
     candidate_id: str
+
+
+class ExplainDriftRequest(BaseModel):
+    drift_summary: dict[str, Any] = Field(default_factory=dict)
+    feature_drifts: list[dict[str, Any]] = Field(default_factory=list)
+    api_key: str | None = None
 
 
 # -------------------------------------------------------------------
@@ -613,6 +623,21 @@ def simulate_drift(request: SimulateDriftRequest):
         raise HTTPException(
             status_code=500, detail="Drift simulation failed"
         ) from exc
+
+
+@app.post("/api/v1/explain/drift")
+def api_explain_drift(request: ExplainDriftRequest):
+    """Generate plain-English executive analysis of drift telemetry (LLM or deterministic fallback)."""
+    from app.diagnostics.explanations import explain_drift
+    try:
+        return explain_drift(
+            drift_summary=request.drift_summary,
+            feature_drifts=request.feature_drifts,
+            api_key=request.api_key,
+        )
+    except Exception as exc:
+        logger.exception("Failed to generate drift explanation")
+        raise HTTPException(status_code=500, detail="Failed to generate drift explanation.") from exc
 
 
 # -------------------------------------------------------------------
