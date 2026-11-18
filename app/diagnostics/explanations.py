@@ -86,44 +86,49 @@ def explain_drift(
     feature_drifts: list[dict[str, Any]],
     api_key: str | None = None,
     model_name: str | None = None,
+    provider: str = "auto",
 ) -> dict[str, Any]:
-    """Generate executive explanation using OpenAI LLM if available, otherwise heuristic engine."""
-    effective_key = api_key or LLM_API_KEY
-    effective_model = model_name or LLM_MODEL_NAME
+    """Generate executive explanation using local Ollama, OpenAI LLM, or heuristic engine."""
+    from app.models.llm_provider import unified_generate, check_ollama_status
 
-    # If no key available, use deterministic heuristic synthesis
-    if not effective_key:
+    effective_key = api_key or LLM_API_KEY
+    ollama_status = check_ollama_status()
+
+    # If heuristic requested or neither key nor ollama is available
+    if provider == "heuristic" or (not effective_key and not ollama_status["available"] and provider != "ollama"):
         return generate_heuristic_explanation(drift_summary, feature_drifts)
 
     try:
-        import openai
-        client = openai.OpenAI(api_key=effective_key)
-
         prompt = (
             f"You are an expert MLOps AI reliability engineer. Analyze this data drift telemetry and output a concise "
             f"executive summary with health status, root-cause assessment, and actionable next steps.\n\n"
             f"Summary: {drift_summary}\n"
             f"Top Features: {feature_drifts[:5]}"
         )
+        sys_prompt = "You are ModelAutopsy AI diagnostic advisor. Provide crisp, professional ML observability summaries."
 
-        response = client.chat.completions.create(
-            model=effective_model,
-            messages=[
-                {"role": "system", "content": "You are ModelAutopsy AI diagnostic advisor. Provide crisp, professional ML observability summaries."},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=400,
-            temperature=0.2,
+        gen_result = unified_generate(
+            prompt=prompt,
+            system_prompt=sys_prompt,
+            provider=provider,
+            model=model_name,
+            api_key=effective_key,
         )
 
-        llm_text = response.choices[0].message.content or ""
+        llm_text = gen_result.get("text", "")
+        used_model = gen_result.get("model", model_name or "llm")
+        used_provider = gen_result.get("provider", provider)
+
         return {
-            "engine": f"llm_assisted ({effective_model})",
+            "engine": f"{used_provider} ({used_model})",
             "health_status": "ANALYZED",
-            "headline": "LLM-synthesized operational assessment",
+            "headline": "AI-synthesized operational assessment",
             "summary": llm_text,
             "recommended_actions": ["Review generated diagnostic narrative and schedule feature recalibration."],
         }
+    except Exception as exc:
+        logger.warning("LLM explanation generation failed (%s). Falling back to heuristic.", exc)
+        return generate_heuristic_explanation(drift_summary, feature_drifts)
 
     except Exception as exc:
         logger.warning("LLM explanation request failed; falling back to heuristic engine: %s", exc)

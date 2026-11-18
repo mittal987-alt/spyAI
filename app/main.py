@@ -376,6 +376,54 @@ class ExplainDriftRequest(BaseModel):
     drift_summary: dict[str, Any] = Field(default_factory=dict)
     feature_drifts: list[dict[str, Any]] = Field(default_factory=list)
     api_key: str | None = None
+    provider: str = Field(default="auto")
+    model: str | None = None
+
+
+class LLMGenerateRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=10000)
+    system_prompt: str = Field(default="", max_length=2000)
+    provider: str = Field(default="auto")
+    model: str | None = None
+    api_key: str | None = None
+
+
+class HardenPromptRequest(BaseModel):
+    original_prompt: str = Field(min_length=1, max_length=10000)
+    attack_vector: str = Field(default="prompt_injection")
+    exploit_sample: str = Field(default="", max_length=5000)
+    provider: str = Field(default="auto")
+    model: str | None = None
+
+
+class CheckRetrainingRequest(BaseModel):
+    psi: float = Field(default=0.0)
+    ks_p_value: float = Field(default=1.0)
+    accuracy_drop_pct: float = Field(default=0.0)
+
+
+class TriggerRetrainingRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+    metrics: dict[str, Any] | None = None
+
+
+class JudgePanelRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=5000)
+    answer: str = Field(min_length=1, max_length=10000)
+    context: str = Field(default="", max_length=20000)
+    provider: str = Field(default="auto")
+    model: str | None = None
+
+
+class VectorIndexRequest(BaseModel):
+    texts: list[str] = Field(min_length=1)
+    metadatas: list[dict[str, Any]] | None = None
+
+
+class VectorSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=5000)
+    top_k: int = Field(default=5, ge=1, le=50)
+    rerank: bool = Field(default=True)
 
 
 # -------------------------------------------------------------------
@@ -627,17 +675,114 @@ def simulate_drift(request: SimulateDriftRequest):
 
 @app.post("/api/v1/explain/drift")
 def api_explain_drift(request: ExplainDriftRequest):
-    """Generate plain-English executive analysis of drift telemetry (LLM or deterministic fallback)."""
+    """Generate plain-English executive analysis of drift telemetry (Ollama local, OpenAI, or heuristic)."""
     from app.diagnostics.explanations import explain_drift
     try:
         return explain_drift(
             drift_summary=request.drift_summary,
             feature_drifts=request.feature_drifts,
             api_key=request.api_key,
+            model_name=request.model,
+            provider=request.provider,
         )
     except Exception as exc:
         logger.exception("Failed to generate drift explanation")
         raise HTTPException(status_code=500, detail="Failed to generate drift explanation.") from exc
+
+
+@app.get("/api/v1/llm/providers")
+def api_get_llm_providers():
+    """List available LLM inference backends (Ollama local, OpenAI cloud, heuristic)."""
+    from app.models.llm_provider import get_available_providers
+    return get_available_providers()
+
+
+@app.post("/api/v1/llm/generate")
+def api_llm_generate(request: LLMGenerateRequest):
+    """Generate text via selected LLM backend (Ollama, OpenAI, or heuristic)."""
+    from app.models.llm_provider import unified_generate
+    try:
+        return unified_generate(
+            prompt=request.prompt,
+            system_prompt=request.system_prompt,
+            provider=request.provider,
+            model=request.model,
+            api_key=request.api_key,
+        )
+    except Exception as exc:
+        logger.exception("LLM generation failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/llm/traces")
+def api_get_llm_traces(limit: int = Query(default=50, ge=1, le=500)):
+    """List recent LLM traces with latency, token counts, and cost telemetry."""
+    from app.monitoring.llm_tracer import list_traces
+    return {"traces": list_traces(limit=limit)}
+
+
+@app.get("/api/v1/llm/traces/stats")
+def api_get_llm_trace_stats():
+    """Aggregate statistics across all recorded LLM calls."""
+    from app.monitoring.llm_tracer import get_trace_stats
+    return get_trace_stats()
+
+
+@app.get("/api/v1/llm/traces/{trace_id}")
+def api_get_llm_trace(trace_id: str):
+    """Retrieve details for a single LLM trace including span waterfall."""
+    from app.monitoring.llm_tracer import get_trace
+    trace = get_trace(trace_id)
+    if not trace:
+        raise HTTPException(status_code=404, detail="Trace not found.")
+    return trace
+
+
+# -------------------------------------------------------------------
+# Autonomous Self-Healing & Remediation Agents
+# -------------------------------------------------------------------
+
+@app.post("/api/v1/agents/harden-prompt")
+def api_harden_prompt(req: HardenPromptRequest):
+    """Autonomous Prompt Hardener Agent: fortifies prompts against injections, jailbreaks, and leaks."""
+    from app.agents.prompt_hardener import harden_prompt
+    try:
+        return harden_prompt(
+            original_prompt=req.original_prompt,
+            attack_vector=req.attack_vector,
+            exploit_sample=req.exploit_sample,
+            provider=req.provider,
+            model=req.model,
+        )
+    except Exception as exc:
+        logger.exception("Prompt hardening agent failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/agents/check-retraining")
+def api_check_retraining(req: CheckRetrainingRequest):
+    """Evaluates telemetry to decide if automated retraining should be triggered."""
+    from app.agents.retraining_trigger import evaluate_retraining_need
+    metrics = {
+        "psi": req.psi,
+        "ks_p_value": req.ks_p_value,
+        "accuracy_drop_pct": req.accuracy_drop_pct,
+    }
+    return evaluate_retraining_need(metrics=metrics)
+
+
+@app.post("/api/v1/agents/trigger-retraining")
+def api_trigger_retraining(req: TriggerRetrainingRequest):
+    """Autonomous Retraining Trigger: queues a self-healing retraining run."""
+    from app.agents.retraining_trigger import trigger_autonomous_retraining
+    return trigger_autonomous_retraining(reason=req.reason, metrics=req.metrics)
+
+
+@app.get("/api/v1/agents/retraining-history")
+def api_get_retraining_history(limit: int = Query(default=50, ge=1, le=500)):
+    """Retrieve historical autonomous retraining runs."""
+    from app.agents.retraining_trigger import get_retraining_history
+    return {"runs": get_retraining_history(limit=limit)}
 
 
 # -------------------------------------------------------------------
@@ -1049,6 +1194,66 @@ def api_delete_golden_dataset(dataset_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Dataset not found")
     return {"deleted": True, "dataset_id": dataset_id}
+
+
+@app.post("/api/v1/rag/judge-panel")
+def api_run_judge_panel(request: JudgePanelRequest):
+    """LLM-as-a-Judge 3-Panel Consensus Jury (Factual Auditor, Security Officer, Relevance Judge)."""
+    from app.diagnostics.llm_judge import run_judge_panel
+    try:
+        return run_judge_panel(
+            query=request.query,
+            answer=request.answer,
+            context=request.context,
+            provider=request.provider,
+            model=request.model,
+        )
+    except Exception as exc:
+        logger.exception("Judge panel execution failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# -------------------------------------------------------------------
+# Dense Vector Store & Neural Reranker Endpoints
+# -------------------------------------------------------------------
+
+@app.get("/api/v1/rag/vectorstore/status")
+def api_vector_store_status():
+    """Retrieve vector store index count and backend status."""
+    from app.diagnostics.vector_store import get_vector_store_status
+    return get_vector_store_status()
+
+
+@app.post("/api/v1/rag/vectorstore/index")
+def api_vector_store_index(req: VectorIndexRequest):
+    """Index and embed documents into the persistent vector store."""
+    from app.diagnostics.vector_store import add_documents
+    try:
+        doc_ids = add_documents(texts=req.texts, metadatas=req.metadatas)
+        return {"indexed_count": len(doc_ids), "doc_ids": doc_ids}
+    except Exception as exc:
+        logger.exception("Vector store indexing failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/rag/vectorstore/search")
+def api_vector_store_search(req: VectorSearchRequest):
+    """Semantic vector search with optional neural reranking."""
+    from app.diagnostics.vector_store import search_vector_store
+    try:
+        results = search_vector_store(query=req.query, top_k=req.top_k, rerank=req.rerank)
+        return {"results": results, "total_found": len(results)}
+    except Exception as exc:
+        logger.exception("Vector store search failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/rag/vectorstore/clear")
+def api_vector_store_clear():
+    """Clear all indexed documents from vector store."""
+    from app.diagnostics.vector_store import clear_vector_store
+    clear_vector_store()
+    return {"cleared": True}
 
 
 # -------------------------------------------------------------------

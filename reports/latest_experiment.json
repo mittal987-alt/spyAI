@@ -1,7 +1,7 @@
 {
   "experiment": "synthetic_feature_drift",
-  "run_id": "71a417ba-578f-45b7-ba30-4943e8863264",
-  "created_at": "2026-11-16T13:37:40.299381+00:00",
+  "run_id": "6724de3a-73d4-4685-a346-a27ad5bf085c",
+  "created_at": "2026-11-18T08:45:15.368875+00:00",
   "dataset": {
     "training_samples": 4500,
     "reference_samples": 1500,
@@ -1066,16 +1066,16 @@
   },
   "alerts": [
     {
-      "alert_id": "66fa406c-62a8-4012-b4a0-52ce56438ca5",
+      "alert_id": "4d6c2f20-017a-44bf-aff6-ebf5f453b874",
       "experiment": "synthetic_feature_drift",
-      "run_id": "71a417ba-578f-45b7-ba30-4943e8863264",
+      "run_id": "6724de3a-73d4-4685-a346-a27ad5bf085c",
       "feature": "feature_0",
       "severity": "high",
       "title": "HIGH drift detected: feature_0",
       "message": "Feature 'feature_0' differs from its reference distribution. KS effect size=0.6933; adjusted p-value=0. Investigate the feature pipeline, data source, and recent upstream changes before relying on model predictions.",
       "effect_size": 0.6933333333333334,
       "adjusted_p_value": 0.0,
-      "created_at": "2026-11-16T13:37:40.297378+00:00",
+      "created_at": "2026-11-18T08:45:15.364663+00:00",
       "details": {
         "feature": "feature_0",
         "ks_statistic": 0.6933333333333334,
@@ -1172,16 +1172,16 @@
       "recommendation": "Investigate the feature pipeline, data source, and recent upstream changes before relying on model predictions."
     },
     {
-      "alert_id": "2252c39e-9321-4477-98a9-77a94d5d3a82",
+      "alert_id": "126800ea-88c5-4f26-ab16-7efccba6d4cc",
       "experiment": "synthetic_feature_drift",
-      "run_id": "71a417ba-578f-45b7-ba30-4943e8863264",
+      "run_id": "6724de3a-73d4-4685-a346-a27ad5bf085c",
       "feature": "feature_1",
       "severity": "medium",
       "title": "MEDIUM drift detected: feature_1",
       "message": "Feature 'feature_1' differs from its reference distribution. KS effect size=0.2740; adjusted p-value=2.40589e-49. Review recent feature distributions and compare them with the reference dataset.",
       "effect_size": 0.274,
       "adjusted_p_value": 2.405892380125276e-49,
-      "created_at": "2026-11-16T13:37:40.297378+00:00",
+      "created_at": "2026-11-18T08:45:15.364663+00:00",
       "details": {
         "feature": "feature_1",
         "ks_statistic": 0.274,
@@ -1278,16 +1278,16 @@
       "recommendation": "Review recent feature distributions and compare them with the reference dataset."
     },
     {
-      "alert_id": "7efd7830-68f1-4428-82b6-a8cd3989e6a1",
+      "alert_id": "2873ed90-b3ea-4d57-aa53-0c41a7ef55f8",
       "experiment": "synthetic_feature_drift",
-      "run_id": "71a417ba-578f-45b7-ba30-4943e8863264",
+      "run_id": "6724de3a-73d4-4685-a346-a27ad5bf085c",
       "feature": "feature_2",
       "severity": "medium",
       "title": "MEDIUM drift detected: feature_2",
       "message": "Feature 'feature_2' differs from its reference distribution. KS effect size=0.1560; adjusted p-value=6.51517e-16. Review recent feature distributions and compare them with the reference dataset.",
       "effect_size": 0.156,
       "adjusted_p_value": 6.51516851658741e-16,
-      "created_at": "2026-11-16T13:37:40.297378+00:00",
+      "created_at": "2026-11-18T08:45:15.364663+00:00",
       "details": {
         "feature": "feature_2",
         "ks_statistic": 0.156,

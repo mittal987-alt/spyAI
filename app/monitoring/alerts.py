@@ -120,11 +120,15 @@ def save_alerts(
 
     with sqlite3.connect(path) as connection:
         for alert in alerts:
-            # Deduplication: skip if same feature+severity within last 24 hours
+            # Deduplication: skip if same feature+severity within 24 hours of alert creation
             from datetime import timedelta
-            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            try:
+                alert_time = datetime.fromisoformat(str(alert.get("created_at", "")).replace("Z", "+00:00"))
+                cutoff = (alert_time - timedelta(hours=24)).isoformat()
+            except Exception:
+                cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
             existing = connection.execute(
-                "SELECT alert_id FROM alerts WHERE feature = ? AND severity = ? AND created_at > ?",
+                "SELECT alert_id FROM alerts WHERE feature = ? AND severity = ? AND created_at >= ?",
                 (alert["feature"], alert["severity"], cutoff)
             ).fetchone()
             if existing:

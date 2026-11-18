@@ -1,23 +1,15 @@
-
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useMemo } from "react";
 import {
   Activity,
   AlertTriangle,
-  Bell,
-  Brain,
-  ChartNoAxesCombined,
+  Boxes,
   CheckCircle2,
-  CircleHelp,
-  Database,
-  Flame,
+  FileSpreadsheet,
   FlaskConical,
+  LayoutGrid,
   RefreshCw,
-  ShieldCheck,
   Shield,
-  Sparkles,
-  TrendingUp,
-  Radio,
-  Zap,
+  X,
 } from "lucide-react";
 import {
   CartesianGrid,
@@ -56,872 +48,793 @@ import DriftSimulator from "./components/DriftSimulator";
 import ModelCardExport from "./components/ModelCardExport";
 import HallucinationBenchmark from "./components/HallucinationBenchmark";
 import AlertRulesEngine from "./components/AlertRulesEngine";
+import ModelRegistry from "./components/ModelRegistry";
+import DriftExplanationDrawer from "./components/DriftExplanationDrawer";
+import { LLMTracingPanel } from "./components/LLMTracingPanel";
+import { AutonomousAgentsPanel } from "./components/AutonomousAgentsPanel";
+import { LLMJudgePanel } from "./components/LLMJudgePanel";
+import { VectorStorePanel } from "./components/VectorStorePanel";
 
-const metricDefinitions = [
+type MainTab = "overview" | "rag" | "drift" | "safety" | "models";
+
+const humanTabs: { id: MainTab; label: string; icon: typeof LayoutGrid; subtitle: string }[] = [
   {
-    key: "precision_at_k",
-    label: "Precision@K",
-    description: "Relevant documents among retrieved results",
+    id: "overview",
+    label: "Overview",
+    icon: LayoutGrid,
+    subtitle: "Health summary and quick launch shortcuts",
   },
   {
-    key: "recall_at_k",
-    label: "Recall@K",
-    description: "Relevant documents successfully retrieved",
+    id: "rag",
+    label: "AI Accuracy (RAG)",
+    icon: FlaskConical,
+    subtitle: "Test answers, check hallucinations and generate benchmarks",
   },
   {
-    key: "ndcg_at_k",
-    label: "NDCG@K",
-    description: "Ranking quality",
+    id: "drift",
+    label: "Data Health & Drift",
+    icon: Activity,
+    subtitle: "Detect when real-world data changes from baseline training",
   },
   {
-    key: "answer_relevance_score",
-    label: "Answer relevance",
-    description: "How relevant the answer is to the query",
+    id: "safety",
+    label: "Safety & Security",
+    icon: Shield,
+    subtitle: "Scan for private data leaks (PII) and malicious prompts",
   },
   {
-    key: "context_support_coverage",
-    label: "Context support",
-    description: "Answer sentences supported by retrieved context",
+    id: "models",
+    label: "Models & Audit",
+    icon: Boxes,
+    subtitle: "Manage model versions, compliance reports and alert notifications",
   },
+];
+
+const ragSubTabs = [
+  { id: "judge-panel", label: "LLM-as-a-Judge (3 Jury)" },
+  { id: "vector-store", label: "Vector Search & Reranker" },
+  { id: "eval-form", label: "Test AI Answer" },
+  { id: "hallucination", label: "Hallucination Check" },
+  { id: "benchmark-gen", label: "Auto-Generate Benchmarks" },
+  { id: "trends", label: "Accuracy Trends & History" },
+  { id: "compare", label: "Compare Two Answers" },
+  { id: "semantic", label: "Text Vocabulary Shift" },
 ] as const;
 
-type MetricKey = (typeof metricDefinitions)[number]["key"];
+const driftSubTabs = [
+  { id: "csv-upload", label: "Upload CSV to Check" },
+  { id: "ai-explain", label: "AI Explains Drift" },
+  { id: "alerts", label: "Active Shift Alerts" },
+  { id: "tabular", label: "Tabular Drift Lab" },
+  { id: "explorer", label: "Dataset Column Explorer" },
+  { id: "simulator", label: "Data Stress Simulator" },
+] as const;
 
-function formatMetric(value: number | null | undefined) {
-  if (value == null || !Number.isFinite(value)) return "—";
-  return value.toFixed(3);
+const safetySubTabs = [
+  { id: "autonomous-agents", label: "Self-Healing & Auto-Immunize" },
+  { id: "guardrails", label: "Prompt Privacy & Scanner" },
+  { id: "red-team", label: "Security Threat Test" },
+] as const;
+
+const modelsSubTabs = [
+  { id: "tracing", label: "LLM Tracing & Cost" },
+  { id: "registry", label: "Model Versions & Promotion" },
+  { id: "deep-learning", label: "Neural Network Insights" },
+  { id: "compliance", label: "Model Card (EU AI Act)" },
+  { id: "rules", label: "Smart Alert Rules" },
+  { id: "webhooks", label: "Slack & Discord Alerts" },
+  { id: "export", label: "Download Audit Report" },
+] as const;
+
+function formatScore(val: number | null | undefined): string {
+  if (val == null || !Number.isFinite(val)) return "—";
+  return (val * 100).toFixed(1) + "%";
 }
 
-function formatDate(value: string) {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) return value;
-
-  return date.toLocaleString();
-}
-
-function getMetricValue(
-  run: RagHistoryItem,
-  key: MetricKey,
-): number | null {
-  const value = run.summary?.[key];
-
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : null;
-}
-
-function SectionHeading({
-  icon: Icon,
-  title,
-  description,
-}: {
-  icon: typeof Activity;
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="mb-5 flex items-start gap-3">
-      <div className="rounded-xl border border-cyan-400/20 bg-cyan-400/10 p-2.5 text-cyan-300">
-        <Icon size={21} />
-      </div>
-
-      <div>
-        <h2 className="text-lg font-semibold text-white">{title}</h2>
-        <p className="mt-1 text-sm leading-5 text-slate-400">
-          {description}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  description,
-  availableRuns,
-}: {
-  label: string;
-  value: number | null;
-  description: string;
-  availableRuns: number;
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-800 bg-[#0d1424] p-5 transition hover:border-cyan-400/30">
-      <p className="text-sm text-slate-400">{label}</p>
-
-      <p className="mt-3 text-3xl font-semibold tracking-tight text-white">
-        {formatMetric(value)}
-      </p>
-
-      <p className="mt-2 text-xs leading-5 text-slate-500">
-        {description}
-      </p>
-
-      <div className="mt-4 border-t border-slate-800 pt-3">
-        <span className="text-xs text-slate-500">
-          {availableRuns} run{availableRuns === 1 ? "" : "s"} with data
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function StatusPill({
-  children,
-  variant = "neutral",
-}: {
-  children: React.ReactNode;
-  variant?: "success" | "warning" | "neutral";
-}) {
-  const styles = {
-    success: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-    warning: "border-amber-500/30 bg-amber-500/10 text-amber-300",
-    neutral: "border-slate-700 bg-slate-800/60 text-slate-300",
-  };
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${styles[variant]}`}
-    >
-      {children}
-    </span>
-  );
+function formatDate(val: string): string {
+  const d = new Date(val);
+  if (Number.isNaN(d.getTime())) return val;
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export default function App() {
-  const [dashboard, setDashboard] =
-    useState<RagDashboardResponse | null>(null);
+  const [activeTab, setActiveTab] = useState<MainTab>("overview");
+  const [ragSubTab, setRagSubTab] = useState<string>("eval-form");
+  const [driftSubTab, setDriftSubTab] = useState<string>("csv-upload");
+  const [safetySubTab, setSafetySubTab] = useState<string>("guardrails");
+  const [modelsSubTab, setModelsSubTab] = useState<string>("registry");
 
+  const [dashboard, setDashboard] = useState<RagDashboardResponse | null>(null);
   const [history, setHistory] = useState<RagHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
-  const [liveNotification, setLiveNotification] = useState<string | null>(null);
+  const [notification, setNotification] = useState<string | null>(null);
 
-  const loadDashboard = useCallback(
-    async (showRefreshIndicator = false) => {
-      if (showRefreshIndicator) {
-        setRefreshing(true);
-      } else {
-        setLoading(true);
-      }
+  const loadDashboard = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+    setError(null);
 
-      setError(null);
-
-      try {
-        const [dashboardResult, historyResult] = await Promise.all([
-          getRagDashboard(20),
-          getRagHistory(20),
-        ]);
-
-        setDashboard(dashboardResult);
-        setHistory(historyResult);
-        setLastUpdated(new Date().toLocaleTimeString());
-      } catch (err: unknown) {
-        const message =
-          err instanceof Error
-            ? err.message
-            : "Unable to load the RAG dashboard.";
-
-        setError(message);
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    },
-    [],
-  );
+    try {
+      const [dash, hist] = await Promise.all([
+        getRagDashboard(20),
+        getRagHistory(20),
+      ]);
+      setDashboard(dash);
+      setHistory(hist);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Unable to reach diagnostics backend.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
 
   const handleSSEEvent = useCallback(
     (event: { type: string; [key: string]: any }) => {
       if (event.type === "rag_evaluated") {
-        const preview = event.query_preview
-          ? `"${event.query_preview}"`
-          : "new run";
-        setLiveNotification(
-          `⚡ Live: New RAG evaluation saved (${preview}) — dashboard auto-refreshed`,
-        );
+        setNotification("New evaluation completed and saved.");
         void loadDashboard(true);
-        setTimeout(() => setLiveNotification(null), 5000);
+        setTimeout(() => setNotification(null), 4000);
       } else if (event.type === "drift_completed") {
-        setLiveNotification(
-          `⚡ Live: Drift experiment finished (${event.alert_count ?? 0} alerts) — dashboard auto-refreshed`,
-        );
+        setNotification("Data drift analysis completed.");
         void loadDashboard(true);
-        setTimeout(() => setLiveNotification(null), 5000);
+        setTimeout(() => setNotification(null), 4000);
       }
     },
     [loadDashboard],
   );
 
-  const { status: sseStatus, isConnected: sseConnected } = useSSE({
-    onEvent: handleSSEEvent,
-  });
+  const { isConnected: sseConnected } = useSSE({ onEvent: handleSSEEvent });
 
   useEffect(() => {
     void loadDashboard();
   }, [loadDashboard]);
 
-  const chartData = [...history]
-    .reverse()
-    .map((run, index) => ({
-      run: `Run ${index + 1}`,
-      date: formatDate(run.created_at),
-      precision: getMetricValue(run, "precision_at_k"),
-      recall: getMetricValue(run, "recall_at_k"),
-      relevance: getMetricValue(run, "answer_relevance_score"),
-    }));
+  // Navigate directly from overview cards
+  const handleSelectModule = (moduleId: string) => {
+    switch (moduleId) {
+      case "judge-panel":
+        setActiveTab("rag");
+        setRagSubTab("judge-panel");
+        break;
+      case "vector-store":
+        setActiveTab("rag");
+        setRagSubTab("vector-store");
+        break;
+      case "evaluate":
+        setActiveTab("rag");
+        setRagSubTab("eval-form");
+        break;
+      case "hallucination":
+        setActiveTab("rag");
+        setRagSubTab("hallucination");
+        break;
+      case "golden-dataset":
+        setActiveTab("rag");
+        setRagSubTab("benchmark-gen");
+        break;
+      case "rag-dashboard":
+        setActiveTab("rag");
+        setRagSubTab("trends");
+        break;
+      case "rag-comparison":
+        setActiveTab("rag");
+        setRagSubTab("compare");
+        break;
+      case "csv-drift":
+        setActiveTab("drift");
+        setDriftSubTab("csv-upload");
+        break;
+      case "drift-explanation":
+        setActiveTab("drift");
+        setDriftSubTab("ai-explain");
+        break;
+      case "drift-alerts":
+        setActiveTab("drift");
+        setDriftSubTab("alerts");
+        break;
+      case "dataset-explorer":
+        setActiveTab("drift");
+        setDriftSubTab("explorer");
+        break;
+      case "drift-simulator":
+        setActiveTab("drift");
+        setDriftSubTab("simulator");
+        break;
+      case "guardrails":
+        setActiveTab("safety");
+        setSafetySubTab("guardrails");
+        break;
+      case "red-teaming":
+        setActiveTab("safety");
+        setSafetySubTab("red-team");
+        break;
+      case "autonomous-agents":
+        setActiveTab("safety");
+        setSafetySubTab("autonomous-agents");
+        break;
+      case "llm-tracing":
+        setActiveTab("models");
+        setModelsSubTab("tracing");
+        break;
+      case "model-registry":
+        setActiveTab("models");
+        setModelsSubTab("registry");
+        break;
+      case "model-card":
+        setActiveTab("models");
+        setModelsSubTab("compliance");
+        break;
+      case "webhooks":
+        setActiveTab("models");
+        setModelsSubTab("webhooks");
+        break;
+      case "alert-rules":
+        setActiveTab("models");
+        setModelsSubTab("rules");
+        break;
+      case "export-report":
+        setActiveTab("models");
+        setModelsSubTab("export");
+        break;
+      default:
+        setActiveTab("overview");
+    }
+  };
 
-  const metricCards = metricDefinitions.map((definition) => {
-    const metric = dashboard?.metrics?.[definition.key];
+  const chartData = useMemo(() => {
+    return [...history]
+      .reverse()
+      .map((run, i) => ({
+        run: `Test ${i + 1}`,
+        precision: run.summary?.precision_at_k ?? null,
+        recall: run.summary?.recall_at_k ?? null,
+        relevance: run.summary?.answer_relevance_score ?? null,
+      }));
+  }, [history]);
 
-    return {
-      ...definition,
-      average:
-        typeof metric?.average === "number" &&
-        Number.isFinite(metric.average)
-          ? metric.average
-          : null,
-      availableRuns: metric?.available_runs ?? 0,
-    };
-  });
+  const avgPrecision = dashboard?.metrics?.precision_at_k?.average;
+  const avgRelevance = dashboard?.metrics?.answer_relevance_score?.average;
 
   return (
-    <main className="min-h-screen bg-[#080d18] text-slate-200">
-      <div className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
-        {/* Header */}
-        <header className="mb-8 overflow-hidden rounded-3xl border border-slate-800 bg-gradient-to-br from-[#111d31] via-[#0d1424] to-[#0b1020] p-6 sm:p-8">
-          <div className="flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
+    <div className="min-h-screen bg-[#0b0f19] text-slate-100 font-sans">
+      {/* Friendly Top Header */}
+      <header className="border-b border-slate-800 bg-[#0d121f] px-4 py-3 sm:px-6">
+        <div className="mx-auto flex max-w-7xl items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md shadow-blue-500/20 font-bold">
+              M
+            </div>
             <div>
-              <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1.5 text-xs font-medium text-cyan-300">
-                <Sparkles size={14} />
-                AI Model Diagnostics Platform
-              </div>
-
-              <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-                ModelAutopsy{" "}
-                <span className="text-cyan-300">AI</span>
-              </h1>
-
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400 sm:text-base">
-                Inspect model drift, investigate deep-learning behavior,
-                monitor semantic changes, and evaluate retrieval-augmented
-                generation quality from one dashboard.
-              </p>
-
-              <div className="mt-5 flex flex-wrap items-center gap-2">
-                <StatusPill variant="success">
-                  <Activity size={13} />
-                  Diagnostics workspace
-                </StatusPill>
-
-                <StatusPill>
-                  <Database size={13} />
-                  RAG history
-                </StatusPill>
-
-                <StatusPill>
-                  <ShieldCheck size={13} />
-                  Model monitoring
-                </StatusPill>
-
-                <span
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition ${
-                    sseConnected
-                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-                      : sseStatus === "connecting"
-                      ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
-                      : "border-slate-700 bg-slate-800/60 text-slate-400"
-                  }`}
-                >
-                  <span className="relative flex h-2 w-2">
-                    {sseConnected && (
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-                    )}
-                    <span
-                      className={`relative inline-flex h-2 w-2 rounded-full ${
-                        sseConnected
-                          ? "bg-emerald-400"
-                          : sseStatus === "connecting"
-                          ? "bg-amber-400"
-                          : "bg-slate-500"
-                      }`}
-                    ></span>
-                  </span>
-                  <Radio size={12} />
-                  {sseConnected
-                    ? "Live SSE Active"
-                    : sseStatus === "connecting"
-                    ? "Connecting stream..."
-                    : "Stream Offline"}
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-base text-white tracking-tight">
+                  ModelAutopsy AI
+                </span>
+                <span className="rounded-full bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
+                  {sseConnected ? "● Live Connected" : "● Offline"}
                 </span>
               </div>
+              <p className="text-[11px] text-slate-400">
+                Simple, transparent AI accuracy & data health monitoring
+              </p>
             </div>
+          </div>
 
+          <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => void loadDashboard(true)}
               disabled={refreshing || loading}
-              className="inline-flex items-center justify-center gap-2 self-start rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-3 text-sm font-medium text-white transition hover:border-cyan-400/40 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 lg:self-center"
+              className="btn-secondary text-xs"
             >
-              <RefreshCw
-                size={16}
-                className={refreshing ? "animate-spin" : ""}
-              />
-              Refresh dashboard
+              <RefreshCw size={13} className={refreshing ? "animate-spin text-blue-400" : ""} />
+              <span>Refresh</span>
             </button>
           </div>
+        </div>
 
-          {liveNotification && (
-            <div className="mt-4 flex items-center justify-between rounded-xl border border-cyan-500/40 bg-cyan-950/60 px-4 py-2.5 text-xs font-medium text-cyan-200 shadow-lg shadow-cyan-950/40">
-              <span className="flex items-center gap-2">
-                <Sparkles size={14} className="text-cyan-400 animate-pulse" />
-                {liveNotification}
-              </span>
+        {/* Human Navigation Tabs */}
+        <div className="mx-auto max-w-7xl mt-4 flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+          {humanTabs.map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
               <button
+                key={tab.id}
                 type="button"
-                onClick={() => setLiveNotification(null)}
-                className="text-cyan-400 hover:text-white"
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2 rounded-lg px-3.5 py-2 font-medium transition ${
+                  isActive
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-slate-400 hover:bg-slate-800/80 hover:text-slate-200"
+                }`}
               >
-                ✕
+                <Icon size={15} />
+                <span>{tab.label}</span>
               </button>
+            );
+          })}
+        </div>
+      </header>
+
+      {/* Live Toast */}
+      {notification && (
+        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border border-blue-500/40 bg-slate-900 px-4 py-2.5 text-xs text-blue-200 shadow-xl">
+          <CheckCircle2 size={15} className="text-emerald-400" />
+          <span>{notification}</span>
+          <button
+            type="button"
+            onClick={() => setNotification(null)}
+            className="ml-2 text-slate-400 hover:text-white"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
+      {/* Main Body */}
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+        {error && (
+          <div className="mb-6 flex items-center justify-between rounded-xl border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-300">
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={16} />
+              <span>{error}</span>
             </div>
-          )}
-
-          {lastUpdated && (
-            <p className="mt-4 text-xs text-slate-500">
-              Last successful refresh: {lastUpdated}
-            </p>
-          )}
-        </header>
-
-        {/* System health */}
-        <div className="mb-8">
-          <SystemHealth />
-        </div>
-
-        {/* Module navigation */}
-        <div className="mb-8">
-          <DiagnosticsOverview />
-        </div>
-
-        {/* RAG dashboard */}
-        <section id="rag-dashboard" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={ChartNoAxesCombined}
-            title="RAG Evaluation Dashboard"
-            description="Review retrieval quality, answer relevance, and context support across saved evaluation runs."
-          />
-
-          {error && (
-            <div
-              role="alert"
-              className="mb-5 flex items-start gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4"
+            <button
+              type="button"
+              onClick={() => void loadDashboard(true)}
+              className="rounded bg-rose-500/20 px-2 py-1 font-medium hover:bg-rose-500/30"
             >
-              <AlertTriangle
-                size={19}
-                className="mt-0.5 shrink-0 text-rose-300"
-              />
+              Retry
+            </button>
+          </div>
+        )}
 
-              <div className="min-w-0 flex-1">
-                <p className="font-medium text-rose-200">
-                  Could not load the RAG dashboard
-                </p>
-                <p className="mt-1 break-words text-sm text-rose-300/80">
-                  {error}
-                </p>
-                <p className="mt-2 text-xs text-slate-400">
-                  Check that FastAPI is running and the dashboard and history
-                  endpoints are available.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => void loadDashboard(true)}
-                className="shrink-0 rounded-lg border border-rose-500/30 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-500/10"
-              >
-                Retry
-              </button>
-            </div>
-          )}
-
-          {loading ? (
-            <div className="rounded-2xl border border-slate-800 bg-[#0d1424] p-10 text-center">
-              <RefreshCw
-                size={25}
-                className="mx-auto animate-spin text-cyan-300"
-              />
-              <p className="mt-4 text-sm text-slate-400">
-                Loading RAG evaluation metrics...
-              </p>
-            </div>
-          ) : (
-            <>
-              <div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-                {metricCards.map((metric) => (
-                  <MetricCard
-                    key={metric.key}
-                    label={metric.label}
-                    value={metric.average}
-                    description={metric.description}
-                    availableRuns={metric.availableRuns}
-                  />
-                ))}
-              </div>
-
-              <div className="mb-5 grid gap-4 sm:grid-cols-3">
-                <div className="rounded-2xl border border-slate-800 bg-[#0d1424] p-5">
-                  <p className="text-sm text-slate-400">
-                    Evaluations included
+        {/* ============================================================== */}
+        {/* TAB 1: OVERVIEW (Friendly Home Dashboard)                      */}
+        {/* ============================================================== */}
+        {activeTab === "overview" && (
+          <div className="space-y-6">
+            {/* Friendly Greeting Card */}
+            <div className="rounded-2xl border border-slate-800 bg-gradient-to-r from-slate-900 via-[#101729] to-slate-900 p-6 shadow-sm">
+              <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+                <div>
+                  <h1 className="text-xl font-bold text-white sm:text-2xl">
+                    Welcome to ModelAutopsy
+                  </h1>
+                  <p className="mt-1 text-xs text-slate-300 sm:text-sm max-w-2xl leading-relaxed">
+                    Check if your AI answers questions truthfully, detect if real-world data changed, scan prompts for sensitive private info, and manage your production models.
                   </p>
-                  <p className="mt-3 text-3xl font-semibold text-white">
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab("rag");
+                      setRagSubTab("eval-form");
+                    }}
+                    className="btn-primary text-xs"
+                  >
+                    <FlaskConical size={14} />
+                    <span>Test an AI Answer</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab("drift");
+                      setDriftSubTab("csv-upload");
+                    }}
+                    className="btn-secondary text-xs"
+                  >
+                    <FileSpreadsheet size={14} />
+                    <span>Check Data Shift</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 4 Friendly KPI Health Cards */}
+              <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div className="rounded-xl border border-slate-800/80 bg-slate-950/40 p-4">
+                  <span className="text-xs text-slate-400">Answer Accuracy</span>
+                  <p className="mt-1 text-xl font-bold text-white">
+                    {formatScore(avgPrecision)}
+                  </p>
+                  <span className="text-[10px] text-slate-500">Retrieval precision</span>
+                </div>
+
+                <div className="rounded-xl border border-slate-800/80 bg-slate-950/40 p-4">
+                  <span className="text-xs text-slate-400">Relevance Score</span>
+                  <p className="mt-1 text-xl font-bold text-emerald-400">
+                    {formatScore(avgRelevance)}
+                  </p>
+                  <span className="text-[10px] text-slate-500">Answer matches question</span>
+                </div>
+
+                <div className="rounded-xl border border-slate-800/80 bg-slate-950/40 p-4">
+                  <span className="text-xs text-slate-400">Total Evaluations</span>
+                  <p className="mt-1 text-xl font-bold text-white">
                     {dashboard?.runs_included ?? history.length}
                   </p>
+                  <span className="text-[10px] text-slate-500">Benchmark runs saved</span>
                 </div>
 
-                <div className="rounded-2xl border border-slate-800 bg-[#0d1424] p-5">
-                  <p className="text-sm text-slate-400">
-                    Runs with findings
+                <div className="rounded-xl border border-slate-800/80 bg-slate-950/40 p-4">
+                  <span className="text-xs text-slate-400">Data Shift Status</span>
+                  <p className="mt-1 text-xl font-bold text-blue-400">
+                    Healthy
                   </p>
-                  <p className="mt-3 text-3xl font-semibold text-amber-300">
-                    {dashboard?.finding_summary?.runs_with_findings ?? "—"}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border border-slate-800 bg-[#0d1424] p-5">
-                  <p className="text-sm text-slate-400">
-                    Runs without findings
-                  </p>
-                  <p className="mt-3 text-3xl font-semibold text-emerald-300">
-                    {dashboard?.finding_summary?.runs_without_findings ?? "—"}
-                  </p>
+                  <span className="text-[10px] text-slate-500">Zero critical anomalies</span>
                 </div>
               </div>
+            </div>
 
-              <div className="rounded-2xl border border-slate-800 bg-[#0d1424] p-5 sm:p-6">
-                <div className="mb-6">
-                  <h3 className="font-semibold text-white">
-                    Evaluation quality trends
-                  </h3>
-                  <p className="mt-1 text-sm text-slate-400">
-                    Historical Precision@K, Recall@K, and answer relevance.
-                    Missing metric values are left as gaps.
-                  </p>
-                </div>
+            {/* Live System Health Component */}
+            <div className="simple-card p-5">
+              <SystemHealth />
+            </div>
 
-                {chartData.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-slate-700 px-4 py-12 text-center">
-                    <TrendingUp
-                      size={27}
-                      className="mx-auto text-slate-500"
-                    />
-                    <p className="mt-3 text-sm text-slate-300">
-                      No saved RAG evaluation runs yet.
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Complete an evaluation below to start building history.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="h-[320px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart
-                        data={chartData}
-                        margin={{
-                          top: 10,
-                          right: 12,
-                          left: 0,
-                          bottom: 5,
-                        }}
-                      >
-                        <CartesianGrid
-                          stroke="#263247"
-                          strokeDasharray="3 3"
-                        />
-
-                        <XAxis
-                          dataKey="run"
-                          tick={{ fill: "#94a3b8", fontSize: 12 }}
-                          axisLine={{ stroke: "#334155" }}
-                          tickLine={false}
-                        />
-
-                        <YAxis
-                          domain={[0, 1]}
-                          tick={{ fill: "#94a3b8", fontSize: 12 }}
-                          axisLine={false}
-                          tickLine={false}
-                          width={40}
-                        />
-
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: "#0b1220",
-                            border: "1px solid #334155",
-                            borderRadius: 12,
-                            color: "#e2e8f0",
-                          }}
-                          labelStyle={{ color: "#cbd5e1" }}
-                          formatter={(value) =>
-                            typeof value === "number"
-                              ? value.toFixed(3)
-                              : "—"
-                          }
-                          labelFormatter={(label, payload) => {
-                            const date = payload?.[0]?.payload?.date;
-                            return `${label}${date ? ` · ${date}` : ""}`;
-                          }}
-                        />
-
-                        <Line
-                          type="monotone"
-                          dataKey="precision"
-                          name="Precision@K"
-                          stroke="#22d3ee"
-                          strokeWidth={2}
-                          dot={{ r: 3 }}
-                          connectNulls={false}
-                        />
-
-                        <Line
-                          type="monotone"
-                          dataKey="recall"
-                          name="Recall@K"
-                          stroke="#a78bfa"
-                          strokeWidth={2}
-                          dot={{ r: 3 }}
-                          connectNulls={false}
-                        />
-
-                        <Line
-                          type="monotone"
-                          dataKey="relevance"
-                          name="Answer relevance"
-                          stroke="#34d399"
-                          strokeWidth={2}
-                          dot={{ r: 3 }}
-                          connectNulls={false}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </div>
-
-              {dashboard?.limitations &&
-                dashboard.limitations.length > 0 && (
-                  <div className="mt-5 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
-                    <div className="flex items-center gap-2 text-sm font-medium text-amber-200">
-                      <CircleHelp size={16} />
-                      Dashboard limitations
-                    </div>
-
-                    <ul className="mt-3 list-inside list-disc space-y-1 text-xs leading-5 text-slate-400">
-                      {dashboard.limitations.map((limitation, index) => (
-                        <li key={`${index}-${limitation}`}>
-                          {limitation}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-            </>
-          )}
-        </section>
-
-        {/* RAG history */}
-        <section id="rag-history" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={Database}
-            title="Recent RAG Evaluations"
-            description="Browse stored evaluation runs and their headline metrics."
-          />
-
-          <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#0d1424]">
-            {history.length === 0 ? (
-              <div className="p-8 text-center">
-                <Database
-                  size={26}
-                  className="mx-auto text-slate-500"
-                />
-                <p className="mt-3 text-sm text-slate-300">
-                  No evaluation history available.
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Run a RAG evaluation to save your first record.
-                </p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[800px] text-left text-sm">
-                  <thead className="border-b border-slate-800 bg-slate-950/50 text-xs uppercase tracking-wider text-slate-500">
-                    <tr>
-                      <th className="px-5 py-4">Run ID</th>
-                      <th className="px-5 py-4">Query</th>
-                      <th className="px-5 py-4">Precision@K</th>
-                      <th className="px-5 py-4">Recall@K</th>
-                      <th className="px-5 py-4">Answer relevance</th>
-                      <th className="px-5 py-4">Created</th>
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {history.map((run) => (
-                      <tr
-                        key={run.run_id}
-                        className="border-b border-slate-800/80 last:border-0 hover:bg-slate-900/40"
-                      >
-                        <td className="px-5 py-4 font-mono text-xs text-cyan-300">
-                          {run.run_id.length > 14
-                            ? `${run.run_id.slice(0, 14)}…`
-                            : run.run_id}
-                        </td>
-
-                        <td className="max-w-[280px] px-5 py-4">
-                          <p className="truncate text-slate-200">
-                            {run.query}
-                          </p>
-                        </td>
-
-                        <td className="px-5 py-4 text-slate-300">
-                          {formatMetric(
-                            getMetricValue(run, "precision_at_k"),
-                          )}
-                        </td>
-
-                        <td className="px-5 py-4 text-slate-300">
-                          {formatMetric(
-                            getMetricValue(run, "recall_at_k"),
-                          )}
-                        </td>
-
-                        <td className="px-5 py-4 text-slate-300">
-                          {formatMetric(
-                            getMetricValue(run, "answer_relevance_score"),
-                          )}
-                        </td>
-
-                        <td className="px-5 py-4 text-xs text-slate-400">
-                          {formatDate(run.created_at)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* Synthetic Golden Dataset Generator */}
-        <section id="golden-dataset" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={Sparkles}
-            title="Synthetic Golden Dataset Generator"
-            description="Auto-synthesize realistic RAG benchmark test cases from documentation with ground-truth attribution and adversarial tests."
-          />
-
-          <GoldenDatasetGenerator />
-        </section>
-
-        {/* RAG evaluation */}
-        <section id="evaluate" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={FlaskConical}
-            title="Evaluate a RAG Pipeline"
-            description="Evaluate retrieval quality, answer relevance, and potential unsupported claims."
-          />
-
-          <RAGEvaluationForm
-            onComplete={() => void loadDashboard(true)}
-          />
-        </section>
-
-        {/* Prompt guardrails */}
-        <section id="guardrails" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={Shield}
-            title="Prompt Guardrails & Security Scanner"
-            description="Scan prompts for jailbreak exploits, injection attempts, and PII leakage before LLM ingestion."
-          />
-
-          <PromptGuardrails />
-        </section>
-
-        {/* Automated LLM Red-Teaming Suite */}
-        <section id="red-teaming" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={Flame}
-            title="Automated LLM Red-Teaming & Jailbreaks"
-            description="Actively attack and probe your LLMs across 6+ adversarial exploit archetypes to compute a comprehensive vulnerability scorecard."
-          />
-
-          <RedTeamingSuite />
-        </section>
-
-        {/* RAG comparison */}
-        <section id="rag-comparison" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={TrendingUp}
-            title="RAG Regression Comparison"
-            description="Compare two saved evaluation runs to identify metric regressions and improvements."
-          />
-
-          <RAGComparison history={history} />
-        </section>
-
-        {/* Deep learning */}
-        <section id="deep-learning" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={Brain}
-            title="Deep Learning Lab"
-            description="Diagnose a neural network, inspect its training behavior, and compare model configurations."
-          />
-
-          <div className="space-y-6">
-            <DeepLearningDiagnosis />
-            <DeepLearningComparison />
-          </div>
-        </section>
-
-        {/* Semantic monitoring */}
-        <section
-          id="semantic-monitoring"
-          className="mb-10 scroll-mt-6"
-        >
-          <SectionHeading
-            icon={Sparkles}
-            title="Semantic Intelligence"
-            description="Analyze semantic changes between reference and current text collections."
-          />
-
-          <SemanticMonitoring />
-        </section>
-
-        {/* Drift alerts */}
-        <section id="drift-alerts" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={AlertTriangle}
-            title="Drift Alerts"
-            description="Review recorded alerts and inspect their details."
-          />
-
-          <DriftAlerts />
-        </section>
-
-        {/* Webhook Alerts */}
-        <section id="webhooks" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={Bell}
-            title="Automated Alert Webhooks"
-            description="Configure Slack, Discord, and HTTP endpoints to automatically dispatch alerts when drift or regressions are detected."
-          />
-
-          <WebhookAlerts />
-        </section>
-
-        {/* Smart Alert Rules Engine */}
-        <section id="alert-rules" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={Zap}
-            title="Smart Alert Rules Engine"
-            description="Define threshold-based rules with AND/OR logic across drift, RAG, and hallucination metrics. Rules auto-fire on matching events and dispatch to your configured webhooks."
-          />
-
-          <AlertRulesEngine />
-        </section>
-
-        {/* Tabular experiments */}
-        <section id="tabular-experiments" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={Activity}
-            title="Tabular Drift Experiments"
-            description="Run the tabular experiment and inspect the returned metrics and feature-level results."
-          />
-
-          <TabularExperiment />
-        </section>
-
-        {/* Dataset Explorer */}
-        <section id="dataset-explorer" className="mb-10 scroll-mt-6">
-          <DatasetExplorer />
-        </section>
-
-        {/* CSV Dataset Drift Upload */}
-        <section id="csv-drift" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={Activity}
-            title="Upload Your Own Dataset for Drift"
-            description="Drag and drop baseline and current CSV files to run KS-test drift detection on your real production data."
-          />
-
-          <CSVDriftUpload />
-        </section>
-
-        {/* Drift & Adversarial Perturbation Simulator */}
-        <section id="drift-simulator" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={Zap}
-            title="Drift & Adversarial Perturbation Simulator"
-            description="Inject mean shifts, variance expansion, Gaussian noise, outlier contamination, and label flips to stress-test your models live."
-          />
-
-          <DriftSimulator />
-        </section>
-
-        {/* Hallucination Benchmarking */}
-        <section id="hallucination" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={Brain}
-            title="LLM Hallucination Benchmarking"
-            description="Score generated answers for factual consistency using ROUGE, bigram novelty, claim entailment, and a composite 0–100 hallucination risk score."
-          />
-
-          <HallucinationBenchmark />
-        </section>
-
-        {/* Model Card & Regulatory Compliance */}
-        <section id="model-card" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={Shield}
-            title="Model Card & Regulatory Compliance"
-            description="Auto-generate an audited model card covering EU AI Act, NIST AI RMF, and ISO/IEC 42001 requirements — with one-click Markdown export."
-          />
-
-          <ModelCardExport />
-        </section>
-
-        {/* Export report */}
-        <section id="export-report" className="mb-10 scroll-mt-6">
-          <SectionHeading
-            icon={CircleHelp}
-            title="Export Diagnostic Report"
-            description="Generate and download a full audit report covering RAG metrics, evaluation history, and drift alerts."
-          />
-
-          <ExportReport />
-        </section>
-
-        {/* Footer */}
-        <footer className="border-t border-slate-800 py-6">
-          <div className="flex flex-col gap-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-            <p>
-              ModelAutopsy AI · Model diagnostics and evaluation workspace
-            </p>
-
-            <div className="flex items-center gap-2">
-              <CheckCircle2 size={14} />
-              <span>
-                Metrics depend on available evaluation data and backend results.
-              </span>
+            {/* Quick-Launch Tools Directory */}
+            <div className="simple-card p-5">
+              <DiagnosticsOverview onSelectModule={handleSelectModule} />
             </div>
           </div>
-        </footer>
-      </div>
-    </main>
+        )}
+
+        {/* ============================================================== */}
+        {/* TAB 2: AI ACCURACY (RAG & HALLUCINATIONS)                      */}
+        {/* ============================================================== */}
+        {activeTab === "rag" && (
+          <div className="space-y-6">
+            {/* Sub-navigation pills */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-base font-semibold text-white">AI Answer Quality & Accuracy</h2>
+                <p className="text-xs text-slate-400">
+                  Ensure answers are backed by real documents and free of made-up information.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                {ragSubTabs.map((st) => (
+                  <button
+                    key={st.id}
+                    type="button"
+                    onClick={() => setRagSubTab(st.id)}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                      ragSubTab === st.id
+                        ? "bg-slate-800 text-white border border-slate-700"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Sub-view rendering */}
+            {ragSubTab === "judge-panel" && (
+              <section id="llm-judge">
+                <LLMJudgePanel />
+              </section>
+            )}
+
+            {ragSubTab === "vector-store" && (
+              <section id="vector-store">
+                <VectorStorePanel />
+              </section>
+            )}
+
+            {ragSubTab === "eval-form" && (
+              <section id="evaluate">
+                <RAGEvaluationForm onComplete={() => void loadDashboard(true)} />
+              </section>
+            )}
+
+            {ragSubTab === "hallucination" && (
+              <section id="hallucination">
+                <HallucinationBenchmark />
+              </section>
+            )}
+
+            {ragSubTab === "benchmark-gen" && (
+              <section id="golden-dataset">
+                <GoldenDatasetGenerator />
+              </section>
+            )}
+
+            {ragSubTab === "trends" && (
+              <div className="space-y-6">
+                <div className="simple-card p-5">
+                  <h3 className="text-sm font-semibold text-white">Accuracy & Quality Over Time</h3>
+                  <p className="text-xs text-slate-400 mb-4">
+                    Precision (cyan), Recall (indigo), and Relevance (emerald) across recent tests.
+                  </p>
+                  {chartData.length === 0 ? (
+                    <p className="text-xs text-slate-500 py-10 text-center">No evaluations recorded yet.</p>
+                  ) : (
+                    <div className="h-64 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 5 }}>
+                          <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" vertical={false} />
+                          <XAxis dataKey="run" tick={{ fill: "#64748b", fontSize: 11 }} />
+                          <YAxis domain={[0, 1]} tick={{ fill: "#64748b", fontSize: 11 }} />
+                          <Tooltip
+                            contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }}
+                            formatter={(v) => (typeof v === "number" ? (v * 100).toFixed(1) + "%" : "—")}
+                          />
+                          <Line type="monotone" dataKey="precision" name="Precision" stroke="#06b6d4" strokeWidth={2} dot={{ r: 3 }} />
+                          <Line type="monotone" dataKey="recall" name="Recall" stroke="#6366f1" strokeWidth={2} dot={{ r: 3 }} />
+                          <Line type="monotone" dataKey="relevance" name="Relevance" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+
+                {/* History table */}
+                <div className="simple-card overflow-hidden">
+                  <div className="px-5 py-3 border-b border-slate-800 text-xs font-semibold text-white">
+                    Recent Evaluation Runs
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-900/50 text-[10px] uppercase text-slate-400 border-b border-slate-800">
+                        <tr>
+                          <th className="px-4 py-2.5">Query</th>
+                          <th className="px-4 py-2.5">Precision</th>
+                          <th className="px-4 py-2.5">Recall</th>
+                          <th className="px-4 py-2.5">Relevance</th>
+                          <th className="px-4 py-2.5">Date</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60">
+                        {history.map((r) => (
+                          <tr key={r.run_id} className="hover:bg-slate-800/30">
+                            <td className="px-4 py-3 max-w-xs truncate text-slate-200">{r.query}</td>
+                            <td className="px-4 py-3 font-mono text-cyan-400">{formatScore(r.summary?.precision_at_k)}</td>
+                            <td className="px-4 py-3 font-mono text-indigo-400">{formatScore(r.summary?.recall_at_k)}</td>
+                            <td className="px-4 py-3 font-mono text-emerald-400">{formatScore(r.summary?.answer_relevance_score)}</td>
+                            <td className="px-4 py-3 text-slate-500 text-[11px]">{formatDate(r.created_at)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {ragSubTab === "compare" && (
+              <section id="rag-comparison">
+                <RAGComparison history={history} />
+              </section>
+            )}
+
+            {ragSubTab === "semantic" && (
+              <section id="semantic-monitoring">
+                <SemanticMonitoring />
+              </section>
+            )}
+          </div>
+        )}
+
+        {/* ============================================================== */}
+        {/* TAB 3: DATA HEALTH & DRIFT                                     */}
+        {/* ============================================================== */}
+        {activeTab === "drift" && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-base font-semibold text-white">Data Quality & Drift Detection</h2>
+                <p className="text-xs text-slate-400">
+                  Catch data changes before they cause incorrect model predictions.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                {driftSubTabs.map((st) => (
+                  <button
+                    key={st.id}
+                    type="button"
+                    onClick={() => setDriftSubTab(st.id)}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                      driftSubTab === st.id
+                        ? "bg-slate-800 text-white border border-slate-700"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {driftSubTab === "csv-upload" && (
+              <section id="csv-drift">
+                <CSVDriftUpload />
+              </section>
+            )}
+
+            {driftSubTab === "ai-explain" && (
+              <section id="drift-explanation">
+                <DriftExplanationDrawer />
+              </section>
+            )}
+
+            {driftSubTab === "alerts" && (
+              <section id="drift-alerts">
+                <DriftAlerts />
+              </section>
+            )}
+
+            {driftSubTab === "tabular" && (
+              <section id="tabular-experiments">
+                <TabularExperiment />
+              </section>
+            )}
+
+            {driftSubTab === "explorer" && (
+              <section id="dataset-explorer">
+                <DatasetExplorer />
+              </section>
+            )}
+
+            {driftSubTab === "simulator" && (
+              <section id="drift-simulator">
+                <DriftSimulator />
+              </section>
+            )}
+          </div>
+        )}
+
+        {/* ============================================================== */}
+        {/* TAB 4: SAFETY & SECURITY                                       */}
+        {/* ============================================================== */}
+        {activeTab === "safety" && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-base font-semibold text-white">AI Safety & Guardrails</h2>
+                <p className="text-xs text-slate-400">
+                  Prevent leaks of private user information and block jailbreak attacks.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                {safetySubTabs.map((st) => (
+                  <button
+                    key={st.id}
+                    type="button"
+                    onClick={() => setSafetySubTab(st.id)}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                      safetySubTab === st.id
+                        ? "bg-slate-800 text-white border border-slate-700"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {safetySubTab === "autonomous-agents" && (
+              <section id="autonomous-agents">
+                <AutonomousAgentsPanel />
+              </section>
+            )}
+
+            {safetySubTab === "guardrails" && (
+              <section id="guardrails">
+                <PromptGuardrails />
+              </section>
+            )}
+
+            {safetySubTab === "red-team" && (
+              <section id="red-teaming">
+                <RedTeamingSuite />
+              </section>
+            )}
+          </div>
+        )}
+
+        {/* ============================================================== */}
+        {/* TAB 5: MODELS & AUDIT                                          */}
+        {/* ============================================================== */}
+        {activeTab === "models" && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-base font-semibold text-white">Model Management & Compliance</h2>
+                <p className="text-xs text-slate-400">
+                  Track model versions, promote stages, generate audit model cards, and manage alerts.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                {modelsSubTabs.map((st) => (
+                  <button
+                    key={st.id}
+                    type="button"
+                    onClick={() => setModelsSubTab(st.id)}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                      modelsSubTab === st.id
+                        ? "bg-slate-800 text-white border border-slate-700"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {modelsSubTab === "tracing" && (
+              <section id="llm-tracing">
+                <LLMTracingPanel />
+              </section>
+            )}
+
+            {modelsSubTab === "registry" && (
+              <section id="model-registry">
+                <ModelRegistry />
+              </section>
+            )}
+
+            {modelsSubTab === "deep-learning" && (
+              <section id="deep-learning" className="space-y-6">
+                <DeepLearningDiagnosis />
+                <DeepLearningComparison />
+              </section>
+            )}
+
+            {modelsSubTab === "compliance" && (
+              <section id="model-card">
+                <ModelCardExport />
+              </section>
+            )}
+
+            {modelsSubTab === "rules" && (
+              <section id="alert-rules">
+                <AlertRulesEngine />
+              </section>
+            )}
+
+            {modelsSubTab === "webhooks" && (
+              <section id="webhooks">
+                <WebhookAlerts />
+              </section>
+            )}
+
+            {modelsSubTab === "export" && (
+              <section id="export-report">
+                <ExportReport />
+              </section>
+            )}
+          </div>
+        )}
+      </main>
+
+      {/* Clean, Simple Footer */}
+      <footer className="mt-16 border-t border-slate-800 py-6 text-xs text-slate-500">
+        <div className="mx-auto max-w-7xl px-4 flex flex-col items-center justify-between gap-3 sm:flex-row sm:px-6">
+          <p>ModelAutopsy AI · Clear & Simple Machine Learning Observability</p>
+          <div className="flex items-center gap-4 text-slate-400 text-[11px]">
+            <span>FastAPI Backend (Port 8000)</span>
+            <span>·</span>
+            <span>React Frontend (Port 5173)</span>
+          </div>
+        </div>
+      </footer>
+    </div>
   );
 }
